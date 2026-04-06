@@ -165,7 +165,8 @@ namespace StrokerSync.MotionSources
         private GameObject          _clitoralTriggerGO;
         private Rigidbody           _clitoralTriggerRb;
         private ClitoralTriggerZone _clitoralTriggerZone;
-        private GameObject          _clitoralIndicatorGO; // Optional visible sphere for positioning
+        private GameObject          _clitoralIndicatorGO;      // Small center-dot sphere for positioning
+        private GameObject          _clitoralOuterIndicatorGO; // Radius-boundary sphere (scales with slider)
 
         // --- Cached Finger Transforms (for penetration detection) ---
         private readonly List<Transform> _fingerTips = new List<Transform>();
@@ -246,6 +247,18 @@ namespace StrokerSync.MotionSources
 
             _clitoralRadius = new JSONStorableFloat(
                 "finger_ClitoralRadius", 0.035f, 0.01f, 0.08f, false);
+            _clitoralRadius.setCallbackFunction = (float val) =>
+            {
+                // Keep physics collider in sync with slider
+                if (_clitoralTriggerGO != null)
+                {
+                    var col = _clitoralTriggerGO.GetComponent<SphereCollider>();
+                    if (col != null) col.radius = val;
+                }
+                // Scale outer indicator to show the new boundary
+                if (_clitoralOuterIndicatorGO != null)
+                    _clitoralOuterIndicatorGO.transform.localScale = Vector3.one * (val * 2f);
+            };
             plugin.RegisterFloat(_clitoralRadius);
 
             _showIndicator = new JSONStorableBool(
@@ -254,6 +267,8 @@ namespace StrokerSync.MotionSources
                 {
                     if (_clitoralIndicatorGO != null)
                         _clitoralIndicatorGO.SetActive(show);
+                    if (_clitoralOuterIndicatorGO != null)
+                        _clitoralOuterIndicatorGO.SetActive(show);
                 });
             plugin.RegisterBool(_showIndicator);
         }
@@ -527,6 +542,14 @@ namespace StrokerSync.MotionSources
             _cachedPelvis        = null;
             _fingerTips.Clear();
 
+            // Reset chooser to Auto and schedule a list refresh so new scene atoms appear.
+            if (_femaleChooser != null)
+            {
+                _femaleChooser.valNoCallback = FEMALE_AUTO;
+                _femaleChooser.choices = new System.Collections.Generic.List<string> { FEMALE_AUTO };
+            }
+            plugin.StartCoroutine(DelayedRepopulate());
+
             _isFingering               = false;
             _wasFingeringLastFrame     = false;
             _clitoralWasActive         = false;
@@ -572,28 +595,27 @@ namespace StrokerSync.MotionSources
             _clitoralTriggerZone = _clitoralTriggerGO.AddComponent<ClitoralTriggerZone>();
             _clitoralTriggerZone.Initialize(FINGER_RB_NAMES);
 
-            // Visual indicator: a semi-transparent pink sphere so the user can see
-            // and position the trigger zone in the VaM viewport.
-            // CreatePrimitive makes a sphere with a MeshCollider — we destroy the
-            // collider immediately so it doesn't interfere with physics.
+            // Visual indicators: two spheres parented to the trigger so they move with it.
+            // Inner: small opaque center dot — shows where the zone is anchored.
+            // Outer: full-radius semi-transparent shell — shows the detection boundary.
+            // CreatePrimitive auto-adds a MeshCollider; destroy it immediately so it
+            // doesn't interfere with physics. Only the mesh renderer is needed.
+            bool showNow = _showIndicator != null && _showIndicator.val;
+            float diameter = col.radius * 2f;
+
+            // ── Inner sphere (center dot, fixed ~1 cm diameter) ────────────────
             _clitoralIndicatorGO = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             _clitoralIndicatorGO.name = "StrokerSync_ClitoralIndicator";
             _clitoralIndicatorGO.transform.SetParent(_clitoralTriggerGO.transform, false);
-
-            float diameter = (col.radius) * 2f;
-            _clitoralIndicatorGO.transform.localScale = Vector3.one * diameter;
-
-            // Destroy the auto-added collider — we only want the mesh, not physics.
-            var meshCol = _clitoralIndicatorGO.GetComponent<Collider>();
-            if (meshCol != null) UnityEngine.Object.Destroy(meshCol);
-
-            // Semi-transparent pink material via Unity's standard shader.
-            var rend = _clitoralIndicatorGO.GetComponent<Renderer>();
-            if (rend != null)
+            _clitoralIndicatorGO.transform.localScale = Vector3.one * 0.012f;
+            var meshColInner = _clitoralIndicatorGO.GetComponent<Collider>();
+            if (meshColInner != null) UnityEngine.Object.Destroy(meshColInner);
+            var rendInner = _clitoralIndicatorGO.GetComponent<Renderer>();
+            if (rendInner != null)
             {
-                var mat = rend.material; // Creates an instance automatically
-                mat.color = new Color(1f, 0.4f, 0.75f, 0.25f); // pink, 25% opacity
-                mat.SetFloat("_Mode", 3f); // Transparent rendering mode
+                var mat = rendInner.material;
+                mat.color = new Color(1f, 0.3f, 0.7f, 0.85f); // bright pink, mostly opaque
+                mat.SetFloat("_Mode", 3f);
                 mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
                 mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
                 mat.SetInt("_ZWrite", 0);
@@ -602,8 +624,30 @@ namespace StrokerSync.MotionSources
                 mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
                 mat.renderQueue = 3000;
             }
+            _clitoralIndicatorGO.SetActive(showNow);
 
-            _clitoralIndicatorGO.SetActive(_showIndicator != null && _showIndicator.val);
+            // ── Outer sphere (radius boundary, scales with slider) ─────────────
+            _clitoralOuterIndicatorGO = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            _clitoralOuterIndicatorGO.name = "StrokerSync_ClitoralOuterIndicator";
+            _clitoralOuterIndicatorGO.transform.SetParent(_clitoralTriggerGO.transform, false);
+            _clitoralOuterIndicatorGO.transform.localScale = Vector3.one * diameter;
+            var meshColOuter = _clitoralOuterIndicatorGO.GetComponent<Collider>();
+            if (meshColOuter != null) UnityEngine.Object.Destroy(meshColOuter);
+            var rendOuter = _clitoralOuterIndicatorGO.GetComponent<Renderer>();
+            if (rendOuter != null)
+            {
+                var mat = rendOuter.material;
+                mat.color = new Color(1f, 0.65f, 0.85f, 0.12f); // light pink, very transparent
+                mat.SetFloat("_Mode", 3f);
+                mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                mat.SetInt("_ZWrite", 0);
+                mat.DisableKeyword("_ALPHATEST_ON");
+                mat.EnableKeyword("_ALPHABLEND_ON");
+                mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                mat.renderQueue = 3001; // render on top of inner sphere
+            }
+            _clitoralOuterIndicatorGO.SetActive(showNow);
 
             // Set initial world position
             if (_cachedPelvis != null)
@@ -629,8 +673,10 @@ namespace StrokerSync.MotionSources
             if (_clitoralTriggerGO != null)
             {
                 UnityEngine.Object.Destroy(_clitoralTriggerGO);
-                _clitoralTriggerGO = null;
-                _clitoralTriggerRb = null;
+                _clitoralTriggerGO       = null;
+                _clitoralTriggerRb       = null;
+                _clitoralIndicatorGO     = null;
+                _clitoralOuterIndicatorGO = null;
             }
         }
 
@@ -743,6 +789,13 @@ namespace StrokerSync.MotionSources
             _femaleChooser.choices = choices;
         }
 
+        private System.Collections.IEnumerator DelayedRepopulate()
+        {
+            yield return new UnityEngine.WaitForSeconds(1.5f);
+            PopulateFemaleChooser();
+            CacheFingerTips();
+        }
+
         // =====================================================================
         // AUTO-SELECT
         // =====================================================================
@@ -840,7 +893,8 @@ namespace StrokerSync.MotionSources
             _penetrationUICleanup.Add(() => plugin.RemoveTextField(header));
 
             var femalePopup = plugin.CreateScrollablePopup(_femaleChooser);
-            femalePopup.label = "Receiver Female";
+            femalePopup.label = "Clit Stim Target";
+            femalePopup.popup.onOpenPopupHandlers += () => PopulateFemaleChooser();
             _penetrationUICleanup.Add(() => plugin.RemovePopup(femalePopup));
 
             var depthSlider = plugin.CreateSlider(_maxFingerDepth);
@@ -863,13 +917,19 @@ namespace StrokerSync.MotionSources
         {
             _clitoralUICleanup.Clear();
 
+            // Target chooser — placed first so it's obvious who the zone tracks.
+            var targetPopup = plugin.CreateScrollablePopup(_femaleChooser, true);
+            targetPopup.label = "Clit Stim Target";
+            targetPopup.popup.onOpenPopupHandlers += () => PopulateFemaleChooser();
+            _clitoralUICleanup.Add(() => plugin.RemovePopup(targetPopup));
+
             var header = plugin.CreateTextField(
                 new JSONStorableString("fingerClitInfo",
                     "Clitoral Zone:\n" +
                     "A sphere (pink indicator) placed near the vaginal\n" +
                     "opening. Fingers inside it drive vibrators.\n" +
                     "Adjust offset/radius to align with the character."), true);
-            header.height = 140f;
+            header.height = 120f;
             _clitoralUICleanup.Add(() => plugin.RemoveTextField(header));
 
             var sensitivitySlider = plugin.CreateSlider(_clitoralSensitivity, true);
@@ -942,9 +1002,6 @@ namespace StrokerSync.MotionSources
             }
 
             SuperController.LogMessage("=== StrokerSync [Finger]: RB NAME DUMP END ===");
-            SuperController.LogMessage(
-                "Hint: Person atoms use 'lIndex3'/'lMid3'/'rIndex3'/'rMid3'. " +
-                "VR controllers use 'L_Finger_Index_C' etc.");
         }
     }
 }

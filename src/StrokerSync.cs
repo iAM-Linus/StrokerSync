@@ -37,6 +37,8 @@ namespace StrokerSync
         private JSONStorableFloat _strokeZoneMax;
         private JSONStorableFloat _sendRateHz;
         private JSONStorableFloat _deviceSmoothnessMs;
+        private JSONStorableBool _curveLearningEnabled;
+
         // Simulator state
         private float _simulatorTarget;
         private float _simulatorSpeed;
@@ -90,6 +92,23 @@ namespace StrokerSync
         private const float STROKE_THRESHOLD_FRACTION = 0.12f; // Threshold = amplitude × this
         private const float STROKE_THRESHOLD_MIN      = 0.02f; // Floor: never coarser than 2 %
         private const float STROKE_THRESHOLD_MAX      = 0.15f; // Ceiling: never finer than 15 %
+
+        // --- Timeline Curve Learning ---
+        private JSONStorableFloat _tlTime;           // Timeline's "Time" param
+        private JSONStorableFloat _tlAnimLength;     // Timeline's "Animation Length" param
+        private JSONStorableFloat _tlSpeed;          // Timeline's "Speed" param
+        private JSONStorableBool _tlIsPlaying;       // Timeline's "Is Playing" param
+        private bool _tlDetected;
+        private float _tlSearchTimer;
+
+        // Learned curve: fixed-size array indexed by normalized time
+        private const int CURVE_RESOLUTION = 256;
+        private float[] _curvePositions;             // Position at each normalized time bin
+        private bool[] _curveFilled;                 // Has this bin been written?
+        private int _curveFilledCount;
+        private float _curveLearnedAnimLength;       // AnimLength when curve was learned (detect changes)
+        private bool _curveIsReady;                  // ≥90% of bins filled = ready for look-ahead
+        private bool _curveLoggedReady;
 
         // Settings save/load via VAM's FileManagerSecure API
         private static readonly string CONFIG_DIR = "Custom\\Scripts\\StrokerSync";
@@ -216,6 +235,9 @@ namespace StrokerSync
             _deviceSmoothnessMs = new JSONStorableFloat("deviceSmoothnessMs", 10f, 0f, 100f);
             RegisterFloat(_deviceSmoothnessMs);
 
+            _curveLearningEnabled = new JSONStorableBool("curveLearning", false);
+            RegisterBool(_curveLearningEnabled);
+
             // Vibration — sent to ALL connected vibrating devices simultaneously.
             var vibModes = new List<string> { "Off", "Depth", "Velocity", "Blend" };
             _vibrationMode = new JSONStorableStringChooser("vibrationMode", vibModes, "Off", "Vibration Mode",
@@ -283,6 +305,7 @@ namespace StrokerSync
                 json["maleFemale_FullStrokeMode"] = GetBoolParamValue("maleFemale_FullStrokeMode") ? "true" : "false";
                 json["maleFemale_RollingWindowSecs"].AsFloat   = GetFloatParamValue("maleFemale_RollingWindowSecs");
                 json["maleFemale_RollingContractRate"].AsFloat = GetFloatParamValue("maleFemale_RollingContractRate");
+                json["curveLearning"] = _curveLearningEnabled.val ? "true" : "false";
 
                 // Toy penetrator defaults
                 var toyAtomParam = GetStringChooserJSONParam("maleFemale_ToyAtom");
@@ -330,6 +353,7 @@ namespace StrokerSync
                 if (json["maleFemale_FullStrokeMode"] != null) SetBoolParamValue("maleFemale_FullStrokeMode", json["maleFemale_FullStrokeMode"].Value == "true");
                 if (json["maleFemale_RollingWindowSecs"]   != null) SetFloatParamValue("maleFemale_RollingWindowSecs",   json["maleFemale_RollingWindowSecs"].AsFloat);
                 if (json["maleFemale_RollingContractRate"] != null) SetFloatParamValue("maleFemale_RollingContractRate", json["maleFemale_RollingContractRate"].AsFloat);
+                if (json["curveLearning"] != null) _curveLearningEnabled.val = json["curveLearning"].Value == "true";
 
                 // Toy penetrator defaults (ToyAtom is scene-specific so skip on load; axis+length persist as user prefs)
                 if (json["maleFemale_ToyAxis"] != null)
@@ -455,6 +479,10 @@ namespace StrokerSync
             pauseToggle.label = "Pause Device";
             _tabCleanup.Add(() => RemoveToggle(pauseToggle));
 
+            var curveToggle = CreateToggle(_curveLearningEnabled, true);
+            curveToggle.label = "Timeline Curve Learning";
+            _tabCleanup.Add(() => RemoveToggle(curveToggle));
+
             var manualSlider = CreateSlider(_simulatorPosition, true);
             manualSlider.label = "Position (manual)";
             _tabCleanup.Add(() => RemoveSlider(manualSlider));
@@ -537,10 +565,10 @@ namespace StrokerSync
             sec.CreateSlider(_sendRateHz, true).label         = "Max Send Rate (Hz)";
             sec.CreateSlider(_deviceSmoothnessMs, true).label = "Duration Padding (ms)";
             sec.CreateSlider(_combinedSource.MFNoiseFilter, true).label =
-                "Noise Filter (0=off, 0.2=moderate)";
+                "Smoothing / Noise Filter";
 
             // ── Right — Auto Calibration ─────────────────────────────────────
-            sec.CreateSpacer(true).height = 8f;
+            sec.CreateSpacer(true).height = 52f;
             sec.CreateTitle("Auto Calibration", true);
             sec.CreateToggle(_combinedSource.MFAutoCalOnLoad, true).label =
                 "Auto-Calibrate on Scene Load";
@@ -662,6 +690,114 @@ namespace StrokerSync
                 $"Active: {_connectionManager.DeviceName}";
         }
 
+        #region Timeline Curve Learning
+
+        private void DetectTimeline()
+        {
+            foreach (var atom in SuperController.singleton.GetAtoms())
+            {
+                if (!atom.on) continue;
+                foreach (var id in atom.GetStorableIDs())
+                {
+                    if (!id.Contains("VamTimeline")) continue;
+
+                    var storable = atom.GetStorableByID(id);
+                    if (storable == null) continue;
+
+                    var time = storable.GetFloatJSONParam("Time");
+                    var length = storable.GetFloatJSONParam("Animation Length");
+                    var speed = storable.GetFloatJSONParam("Speed");
+                    var playing = storable.GetBoolJSONParam("Is Playing");
+
+                    if (time != null && length != null)
+                    {
+                        _tlTime = time;
+                        _tlAnimLength = length;
+                        _tlSpeed = speed;
+                        _tlIsPlaying = playing;
+                        _tlDetected = true;
+
+                        _curvePositions = new float[CURVE_RESOLUTION];
+                        _curveFilled = new bool[CURVE_RESOLUTION];
+                        _curveFilledCount = 0;
+                        _curveIsReady = false;
+                        _curveLoggedReady = false;
+                        _curveLearnedAnimLength = length.val;
+
+                        SuperController.LogMessage($"StrokerSync: Timeline detected on '{atom.uid}' ({id}). " +
+                            $"AnimLength={length.val:F2}s. Curve learning active.");
+                        return;
+                    }
+                }
+            }
+        }
+
+        private void RecordCurveSample(float normalizedTime, float position)
+        {
+            int bin = Mathf.Clamp((int)(normalizedTime * CURVE_RESOLUTION), 0, CURVE_RESOLUTION - 1);
+
+            if (!_curveFilled[bin])
+            {
+                _curvePositions[bin] = position;
+                _curveFilled[bin] = true;
+                _curveFilledCount++;
+            }
+            else
+            {
+                _curvePositions[bin] = Mathf.Lerp(_curvePositions[bin], position, 0.3f);
+            }
+
+            if (!_curveIsReady && _curveFilledCount >= (int)(CURVE_RESOLUTION * 0.9f))
+            {
+                _curveIsReady = true;
+                FillCurveGaps();
+            }
+        }
+
+        private float LookAheadOnCurve(float normalizedTime, float lookAheadNormalized)
+        {
+            float futureTime = normalizedTime + lookAheadNormalized;
+
+            futureTime = futureTime % 1f;
+            if (futureTime < 0f) futureTime += 1f;
+
+            int bin = Mathf.Clamp((int)(futureTime * CURVE_RESOLUTION), 0, CURVE_RESOLUTION - 1);
+            return _curvePositions[bin];
+        }
+
+        private void FillCurveGaps()
+        {
+            for (int i = 0; i < CURVE_RESOLUTION; i++)
+            {
+                if (_curveFilled[i]) continue;
+
+                int left = -1, right = -1;
+                for (int d = 1; d < CURVE_RESOLUTION; d++)
+                {
+                    int li = (i - d + CURVE_RESOLUTION) % CURVE_RESOLUTION;
+                    if (_curveFilled[li] && left < 0) left = li;
+                    int ri = (i + d) % CURVE_RESOLUTION;
+                    if (_curveFilled[ri] && right < 0) right = ri;
+                    if (left >= 0 && right >= 0) break;
+                }
+
+                if (left >= 0 && right >= 0)
+                {
+                    int gap = (right - left + CURVE_RESOLUTION) % CURVE_RESOLUTION;
+                    int pos = (i - left + CURVE_RESOLUTION) % CURVE_RESOLUTION;
+                    float t = (gap > 0) ? (float)pos / gap : 0f;
+                    _curvePositions[i] = Mathf.Lerp(_curvePositions[left], _curvePositions[right], t);
+                }
+                else if (left >= 0) _curvePositions[i] = _curvePositions[left];
+                else if (right >= 0) _curvePositions[i] = _curvePositions[right];
+
+                _curveFilled[i] = true;
+                _curveFilledCount++;
+            }
+        }
+
+        #endregion
+
         // =====================================================================
         // UPDATE LOOP
         // =====================================================================
@@ -676,6 +812,16 @@ namespace StrokerSync
             _isInitialized = _connectionManager != null && _connectionManager.IsConnected;
 
             if (!_isInitialized) return;
+
+            if (_curveLearningEnabled.val && !_tlDetected)
+            {
+                _tlSearchTimer -= Time.deltaTime;
+                if (_tlSearchTimer <= 0f)
+                {
+                    _tlSearchTimer = 3f;
+                    DetectTimeline();
+                }
+            }
 
             UpdateMotionSource();
             UpdateSimulator();
@@ -774,15 +920,15 @@ namespace StrokerSync
                 // Detect stroke reversal: EMA velocity and instant velocity have opposite signs.
                 // At turnarounds, velocity extrapolation always overshoots — suppress it entirely
                 // and just send the current position so the device decelerates naturally.
-                _isReversing = (_signedVelocity >  0.05f && signedInstant < -0.05f) ||
-                               (_signedVelocity < -0.05f && signedInstant >  0.05f);
+                _isReversing = (_signedVelocity > 0.05f && signedInstant < -0.05f) ||
+                               (_signedVelocity < -0.05f && signedInstant > 0.05f);
 
                 // Update stroke amplitude tracking on each direction change.
-                // Blend 70 % new / 30 % old to resist isolated physics spikes.
+                // Blend 70% new / 30% old to resist isolated physics spikes.
                 if (_isReversing)
                 {
-                    if (_signedVelocity > 0f) _strokePeak   = Mathf.Lerp(_strokePeak,   mappedPos, 0.7f);
-                    else                       _strokeValley = Mathf.Lerp(_strokeValley, mappedPos, 0.7f);
+                    if (_signedVelocity > 0f) _strokePeak = Mathf.Lerp(_strokePeak, mappedPos, 0.7f);
+                    else _strokeValley = Mathf.Lerp(_strokeValley, mappedPos, 0.7f);
                 }
 
                 _signedVelocity = Mathf.Lerp(signedInstant, _signedVelocity, EXTRAP_VELOCITY_SMOOTHING);
@@ -811,12 +957,70 @@ namespace StrokerSync
 
             _sendAccumulator -= sendInterval;
 
-            // --- LOOK-AHEAD: VELOCITY EXTRAPOLATION ---
-            // At stroke reversals, suppress extrapolation: send current position so the
-            // device decelerates into the turnaround instead of overshooting and snapping back.
-            float extrapolatedPos = _isReversing
-                ? mappedPos
-                : mappedPos + _signedVelocity * sendInterval;
+            // --- LOOK-AHEAD: CURVE LEARNING OR VELOCITY EXTRAPOLATION ---
+            float extrapolatedPos;
+            bool usedCurve = false;
+
+            if (_curveLearningEnabled.val && _tlDetected && _curveIsReady &&
+                _tlTime != null && _tlAnimLength != null && _tlAnimLength.val > 0.01f)
+            {
+                bool isPlaying = _tlIsPlaying == null || _tlIsPlaying.val;
+
+                if (isPlaying)
+                {
+                    float animLen = _tlAnimLength.val;
+
+                    if (Mathf.Abs(animLen - _curveLearnedAnimLength) > 0.1f)
+                    {
+                        SuperController.LogMessage($"StrokerSync: Animation changed ({_curveLearnedAnimLength:F1}s → {animLen:F1}s). Resetting curve.");
+                        _curveLearnedAnimLength = animLen;
+                        _curveFilledCount = 0;
+                        _curveIsReady = false;
+                        _curveLoggedReady = false;
+                        for (int i = 0; i < CURVE_RESOLUTION; i++) _curveFilled[i] = false;
+                    }
+
+                    float normalizedTime = Mathf.Clamp01(_tlTime.val / animLen);
+                    float speed = (_tlSpeed != null) ? _tlSpeed.val : 1f;
+                    float lookAheadNorm = (sendInterval * speed) / animLen;
+
+                    RecordCurveSample(normalizedTime, mappedPos);
+                    extrapolatedPos = LookAheadOnCurve(normalizedTime, lookAheadNorm);
+                    usedCurve = true;
+
+                    if (!_curveLoggedReady)
+                    {
+                        _curveLoggedReady = true;
+                        SuperController.LogMessage($"StrokerSync: Curve learned! ({_curveFilledCount}/{CURVE_RESOLUTION} bins). " +
+                            $"Using deterministic look-ahead ({lookAheadNorm * animLen * 1000f:F0}ms ahead).");
+                    }
+                }
+                else
+                {
+                    extrapolatedPos = mappedPos;
+                }
+            }
+            else
+            {
+                // Fallback Look-Ahead: Velocity Extrapolation
+                // At stroke reversals, suppress extrapolation: send current position so the
+                // device decelerates into the turnaround instead of overshooting and snapping back.
+                extrapolatedPos = _isReversing
+                    ? mappedPos
+                    : mappedPos + _signedVelocity * sendInterval;
+
+                // Record curve samples if we are currently in the learning phase
+                if (_curveLearningEnabled.val && _tlDetected && !_curveIsReady &&
+                    _tlTime != null && _tlAnimLength != null && _tlAnimLength.val > 0.01f)
+                {
+                    bool isPlaying = _tlIsPlaying == null || _tlIsPlaying.val;
+                    if (isPlaying)
+                    {
+                        float normalizedTime = Mathf.Clamp01(_tlTime.val / _tlAnimLength.val);
+                        RecordCurveSample(normalizedTime, mappedPos);
+                    }
+                }
+            }
 
             extrapolatedPos = Mathf.Clamp01(extrapolatedPos);
 
@@ -834,8 +1038,8 @@ namespace StrokerSync
             // Direction reversals always bypass this filter.
             //
             // The threshold scales with the observed stroke amplitude:
-            //   large stroke (0→1)  → threshold ≈ 12 % → sparse updates, no stepping
-            //   small stroke (0→15%) → threshold ≈ 2 %  → fine updates, no rigid feel
+            //   large stroke (0→1)  → threshold ≈ 12% → sparse updates, no stepping
+            //   small stroke (0→15%) → threshold ≈ 2%  → fine updates, no rigid feel
             float strokeAmplitude = Mathf.Max(0f, _strokePeak - _strokeValley);
             float strokeThreshold = Mathf.Clamp(
                 strokeAmplitude * STROKE_THRESHOLD_FRACTION,
@@ -867,8 +1071,9 @@ namespace StrokerSync
                 if (!_loggedFirstSend)
                 {
                     _loggedFirstSend = true;
+                    string mode = usedCurve ? "curve" : "velocity";
                     SuperController.LogMessage($"StrokerSync: First command sent! pos={extrapolatedPos:F3} (raw={mappedPos:F3}) " +
-                        $"dur={durationMs}ms rate={effectiveHz:F0}Hz");
+                        $"dur={durationMs}ms rate={effectiveHz:F0}Hz mode={mode}");
                 }
 
                 // Simulator reflects what the device actually received
