@@ -38,6 +38,15 @@ namespace StrokerSync.MotionSources
         /// </summary>
         public void AutoDetectToyAxis() => _maleFemale.AutoDetectToyAxis();
 
+        // ── MaleFemaleSource storable pass-throughs (used by BuildStrokerTab) ─
+        public JSONStorableString MFRangeDisplay    => _maleFemale.PenRangeDisplay;
+        public JSONStorableFloat  MFNoiseFilter     => _maleFemale.NoiseFilter;
+        public JSONStorableBool   MFAutoCalOnLoad   => _maleFemale.AutoCalOnLoad;
+        public JSONStorableFloat  MFAutoCalDelay    => _maleFemale.AutoCalDelay;
+        public JSONStorableBool   MFRollingCal      => _maleFemale.RollingCal;
+        public JSONStorableFloat  MFRollingWindow   => _maleFemale.RollingWindowSecs;
+        public JSONStorableFloat  MFRollingRate     => _maleFemale.RollingContractRate;
+
         // =====================================================================
         // IMOTIONSOURCE
         // =====================================================================
@@ -104,21 +113,14 @@ namespace StrokerSync.MotionSources
         // =====================================================================
 
         /// <summary>
-        /// Builds UI for penis / toy penetration tracking (Stroker page, left column).
+        /// Builds left-column detection/selection/range UI for the Stroker page.
+        /// Calibration controls and the signal display are created separately by
+        /// BuildStrokerTab so they can be placed precisely in the right column.
         /// </summary>
         public Action BuildMaleFemaleUI(StrokerSync plugin)
         {
-            var header = plugin.CreateTextField(
-                new JSONStorableString("mfHeader", "— Penis / Toy / Object Penetration —"));
-            header.height = 40f;
-
-            _maleFemale.CreateUI(plugin);
-
-            return () =>
-            {
-                plugin.RemoveTextField(header);
-                _maleFemale.DestroyUI();
-            };
+            _maleFemale.CreateDetectionUI(plugin);
+            return () => _maleFemale.DestroyUI();
         }
 
         /// <summary>
@@ -126,16 +128,11 @@ namespace StrokerSync.MotionSources
         /// </summary>
         public Action BuildFingerPenetrationUI(StrokerSync plugin)
         {
-            var header = plugin.CreateTextField(
-                new JSONStorableString("fingerPenHeader",
-                    "— Finger / Dildo Penetration Tracking —"));
-            header.height = 40f;
 
             _finger.CreatePenetrationUI(plugin);
 
             return () =>
             {
-                plugin.RemoveTextField(header);
                 _finger.DestroyPenetrationUI();
             };
         }
@@ -156,17 +153,12 @@ namespace StrokerSync.MotionSources
         public Action BuildVibrationUI(StrokerSync plugin)
         {
             var sep    = plugin.CreateSpacer();
-            var header = plugin.CreateTextField(
-                new JSONStorableString("clitHeader",
-                    "— Clitoral Zone (drives vibrators) —"));
-            header.height = 40f;
 
             _finger.CreateClitoralUI(plugin);
 
             return () =>
             {
                 plugin.RemoveSpacer(sep);
-                plugin.RemoveTextField(header);
                 _finger.DestroyClitoralUI();
             };
         }

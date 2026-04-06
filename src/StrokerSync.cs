@@ -514,22 +514,44 @@ namespace StrokerSync
 
             // ── Back button ───────────────────────────────────────────────────
             var backBtn = sec.CreateButton("‹ Back");
+            backBtn.height = 100f;
+            backBtn.buttonColor = new Color(0.2f, 0.8f, 0.2f);
             backBtn.button.onClick.AddListener(() => BuildTab("Connection"));
 
-            // ── Left — penis / toy penetration source ─────────────────────────
+            // ── Left — detection / selection / range controls ─────────────────
             sec.CreateTitle("Penis / Toy Penetration");
             sec.OnRemove(_combinedSource.BuildMaleFemaleUI(this));
 
-            // ── Right — stroke zone ───────────────────────────────────────────
+            // ── Right — signal display (top of right column) ──────────────────
+            var rangeDisplay = sec.CreateTextField(_combinedSource.MFRangeDisplay, true);
+            rangeDisplay.height = 40f;
+
+            // ── Right — Stroke Zone ───────────────────────────────────────────
             sec.CreateTitle("Stroke Zone", true);
             sec.CreateSlider(_strokeZoneMin, true).label = "Stroke Min";
             sec.CreateSlider(_strokeZoneMax, true).label = "Stroke Max";
 
-            // ── Right — send rate & timing ────────────────────────────────────
+            // ── Right — Send Rate & Timing ────────────────────────────────────
             sec.CreateSpacer(true).height = 8f;
             sec.CreateTitle("Send Rate & Timing", true);
             sec.CreateSlider(_sendRateHz, true).label         = "Max Send Rate (Hz)";
             sec.CreateSlider(_deviceSmoothnessMs, true).label = "Duration Padding (ms)";
+            sec.CreateSlider(_combinedSource.MFNoiseFilter, true).label =
+                "Noise Filter (0=off, 0.2=moderate)";
+
+            // ── Right — Auto Calibration ─────────────────────────────────────
+            sec.CreateSpacer(true).height = 8f;
+            sec.CreateTitle("Auto Calibration", true);
+            sec.CreateToggle(_combinedSource.MFAutoCalOnLoad, true).label =
+                "Auto-Calibrate on Scene Load";
+            sec.CreateSlider(_combinedSource.MFAutoCalDelay, true).label =
+                "Auto-Cal Delay (seconds)";
+            sec.CreateToggle(_combinedSource.MFRollingCal, true).label =
+                "Rolling Calibration (continuous)";
+            sec.CreateSlider(_combinedSource.MFRollingWindow, true).label =
+                "Rolling Cal Window (seconds)";
+            sec.CreateSlider(_combinedSource.MFRollingRate, true).label =
+                "Rolling Cal Rate (per window)";
         }
 
         private void BuildPenetrationTab()
@@ -539,6 +561,8 @@ namespace StrokerSync
 
             // ── Back button ───────────────────────────────────────────────────
             var backBtn = sec.CreateButton("‹ Back");
+            backBtn.height = 100f;
+            backBtn.buttonColor = new Color(0.2f, 0.8f, 0.2f);
             backBtn.button.onClick.AddListener(() => BuildTab("Connection"));
 
             // ── Left — finger / dildo penetration tracking ────────────────────
@@ -553,6 +577,8 @@ namespace StrokerSync
 
             // ── Back button ───────────────────────────────────────────────────
             var backBtn = sec.CreateButton("‹ Back");
+            backBtn.height = 100f;
+            backBtn.buttonColor = new Color(0.2f, 0.8f, 0.2f);
             backBtn.button.onClick.AddListener(() => BuildTab("Connection"));
 
             // ── Left — vibration mode ─────────────────────────────────────────
@@ -563,15 +589,14 @@ namespace StrokerSync
             dispSlider.label = "Live Intensity";
             dispSlider.slider.interactable = false;
 
-            // ── Left — clitoral zone ──────────────────────────────────────────
-            sec.CreateSpacer().height = 8f;
-            sec.CreateTitle("Clitoral Zone");
-            sec.OnRemove(_combinedSource.BuildVibrationUI(this));
-
             // ── Right ─────────────────────────────────────────────────────────
-            sec.CreateSpacer(true).height = 10f;
             var saveBtn = sec.CreateButton("Save Settings as Default", true);
+            saveBtn.height = 100f;
             saveBtn.button.onClick.AddListener(SaveDefaults);
+
+            // ── Right — clitoral zone ──────────────────────────────────────────
+            sec.CreateTitle("Clitoral Zone", true);
+            sec.OnRemove(_combinedSource.BuildVibrationUI(this));
         }
 
         // =====================================================================

@@ -127,7 +127,6 @@
     <Compile Include="src\MotionSources\FingerSource.cs" />
     <Compile Include="src\MotionSources\IMotionSource.cs" />
     <Compile Include="src\MotionSources\MaleFemaleSource.cs" />
-    <Compile Include="src\MotionSources\TimelineSource.cs" />
     <Compile Include="src\OverlayPanel.cs" />
     <Compile Include="src\TinyWebSocket.cs" />
     <Compile Include="src\StrokerSync.cs" />
@@ -137,7 +136,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="ADDME.cslist" />
-    <None Include="TODO.md" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

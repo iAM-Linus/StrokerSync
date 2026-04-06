@@ -824,13 +824,19 @@ namespace StrokerSync.MotionSources
         {
             _penetrationUICleanup.Clear();
 
+            var spacer = plugin.CreateSpacer(true);
+            spacer.height = 40f;
+                _penetrationUICleanup.Add(() => plugin.RemoveSpacer(spacer));
+
+
             var header = plugin.CreateTextField(
                 new JSONStorableString("fingerPenInfo",
                     "Finger Penetration:\n" +
                     "Tracks fingertip rigidbodies inside the vaginal\n" +
                     "opening and drives the Handy stroke depth.\n" +
-                    "Supports fingers, dildos, and VR controller hands."));
-            header.height = 110f;
+                    "Supports fingers, dildos, and VR controller hands."), true);
+            header.height = 240f;
+
             _penetrationUICleanup.Add(() => plugin.RemoveTextField(header));
 
             var femalePopup = plugin.CreateScrollablePopup(_femaleChooser);
@@ -862,31 +868,31 @@ namespace StrokerSync.MotionSources
                     "Clitoral Zone:\n" +
                     "A sphere (pink indicator) placed near the vaginal\n" +
                     "opening. Fingers inside it drive vibrators.\n" +
-                    "Adjust offset/radius to align with the character."));
-            header.height = 110f;
+                    "Adjust offset/radius to align with the character."), true);
+            header.height = 140f;
             _clitoralUICleanup.Add(() => plugin.RemoveTextField(header));
 
-            var sensitivitySlider = plugin.CreateSlider(_clitoralSensitivity);
+            var sensitivitySlider = plugin.CreateSlider(_clitoralSensitivity, true);
             sensitivitySlider.label = "Clitoral Sensitivity (speed bonus)";
             _clitoralUICleanup.Add(() => plugin.RemoveSlider(sensitivitySlider));
 
-            var baseIntensitySlider = plugin.CreateSlider(_clitoralBaseIntensity);
+            var baseIntensitySlider = plugin.CreateSlider(_clitoralBaseIntensity, true);
             baseIntensitySlider.label = "Clitoral Base Intensity (at rest)";
             _clitoralUICleanup.Add(() => plugin.RemoveSlider(baseIntensitySlider));
 
-            var fwdSlider = plugin.CreateSlider(_clitoralOffsetFwd);
+            var fwdSlider = plugin.CreateSlider(_clitoralOffsetFwd, true);
             fwdSlider.label = "Clitoral Offset Forward (m)";
             _clitoralUICleanup.Add(() => plugin.RemoveSlider(fwdSlider));
 
-            var upSlider = plugin.CreateSlider(_clitoralOffsetUp);
+            var upSlider = plugin.CreateSlider(_clitoralOffsetUp, true);
             upSlider.label = "Clitoral Offset Up (m)";
             _clitoralUICleanup.Add(() => plugin.RemoveSlider(upSlider));
 
-            var radiusSlider = plugin.CreateSlider(_clitoralRadius);
+            var radiusSlider = plugin.CreateSlider(_clitoralRadius, true);
             radiusSlider.label = "Clitoral Trigger Radius (m)";
             _clitoralUICleanup.Add(() => plugin.RemoveSlider(radiusSlider));
 
-            var indicatorToggle = plugin.CreateToggle(_showIndicator);
+            var indicatorToggle = plugin.CreateToggle(_showIndicator, true);
             indicatorToggle.label = "Show Clitoral Trigger Sphere";
             _clitoralUICleanup.Add(() => plugin.RemoveToggle(indicatorToggle));
         }

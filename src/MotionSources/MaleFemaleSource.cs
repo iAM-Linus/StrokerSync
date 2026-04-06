@@ -178,13 +178,22 @@ namespace StrokerSync.MotionSources
             plugin.StartCoroutine(DelayedInit());
         }
 
-        /// <summary>Remove all UI elements created by CreateUI.</summary>
+        /// <summary>Remove all UI elements created by CreateUI / CreateDetectionUI.</summary>
         public void DestroyUI()
         {
             foreach (var cleanup in _uiCleanup)
                 try { cleanup(); } catch { }
             _uiCleanup.Clear();
         }
+
+        // ── Storable accessors for tab-based UI layout ─────────────────────────
+        public JSONStorableString PenRangeDisplay   => _penRangeDisplay;
+        public JSONStorableFloat  NoiseFilter        => _noiseFilter;
+        public JSONStorableBool   AutoCalOnLoad      => _autoCalOnLoad;
+        public JSONStorableFloat  AutoCalDelay       => _autoCalDelay;
+        public JSONStorableBool   RollingCal         => _rollingCalEnabled;
+        public JSONStorableFloat  RollingWindowSecs  => _rollingWindowSecs;
+        public JSONStorableFloat  RollingContractRate => _rollingContractRate;
 
         public void OnInitStorables(StrokerSync plugin)
         {
@@ -1620,21 +1629,15 @@ namespace StrokerSync.MotionSources
             _femaleChooser.valNoCallback = s;
         }
 
-        public void CreateUI(StrokerSync plugin)
+        /// <summary>
+        /// Create the LEFT-column detection/selection/range UI.
+        /// Called by CombinedSource.BuildMaleFemaleUI when operating in tab mode.
+        /// Calibration controls and the signal display are built directly in
+        /// BuildStrokerTab so their column position can be controlled precisely.
+        /// </summary>
+        public void CreateDetectionUI(StrokerSync plugin)
         {
             _uiCleanup.Clear();
-
-            // === Auto-Calibrate at the very top — most used feature ===
-            _autoCalButton = plugin.CreateButton("Auto-Calibrate Range (8s)");
-            _autoCalButton.button.onClick.AddListener(() => StartAutoCalibration());
-            _uiCleanup.Add(() => plugin.RemoveButton(_autoCalButton));
-
-            var display = plugin.CreateTextField(_penRangeDisplay);
-            display.height = 40f;
-            _uiCleanup.Add(() => plugin.RemoveTextField(display));
-
-            var sp1 = plugin.CreateSpacer();
-            _uiCleanup.Add(() => plugin.RemoveSpacer(sp1));
 
             // --- Character / Toy Selection ---
             var malePopup = plugin.CreateScrollablePopup(_maleChooser);
@@ -1642,16 +1645,68 @@ namespace StrokerSync.MotionSources
             malePopup.popup.onOpenPopupHandlers += () => FindMales();
             _uiCleanup.Add(() => plugin.RemovePopup(malePopup));
 
-            // Toy/object penetrator — separate chooser that lists only non-Person atoms.
-            // When set to anything other than "None", overrides the male chooser above.
-            // Selecting a toy automatically runs AutoDetectToyAxis via the callback.
             var toyAtomPopup = plugin.CreateScrollablePopup(_toyAtomChooser);
             toyAtomPopup.label = "Toy/Object Penetrator (overrides male if set)";
             toyAtomPopup.popup.onOpenPopupHandlers += () => FindToys();
             _uiCleanup.Add(() => plugin.RemovePopup(toyAtomPopup));
 
-            // Re-detect button: re-run the collider scan if the toy was moved/scaled
-            // after initial selection, or if auto-detect picked the wrong end.
+            var femalePopup = plugin.CreateScrollablePopup(_femaleChooser);
+            femalePopup.label = "Receiver (Auto = closest)";
+            femalePopup.popup.onOpenPopupHandlers += () => FindFemales();
+            _uiCleanup.Add(() => plugin.RemovePopup(femalePopup));
+
+            var targetPopup = plugin.CreateScrollablePopup(_targetChooser);
+            targetPopup.label = "Target Orifice";
+            _uiCleanup.Add(() => plugin.RemovePopup(targetPopup));
+
+            // --- Stroke Range ---
+            var rangeMinSlider = plugin.CreateSlider(_penRangeMin);
+            rangeMinSlider.label = "Pen Range Min (out position)";
+            _uiCleanup.Add(() => plugin.RemoveSlider(rangeMinSlider));
+
+            var rangeMaxSlider = plugin.CreateSlider(_penRangeMax);
+            rangeMaxSlider.label = "Pen Range Max (in position)";
+            _uiCleanup.Add(() => plugin.RemoveSlider(rangeMaxSlider));
+
+            var fullStrokeToggle = plugin.CreateToggle(_fullStrokeMode);
+            fullStrokeToggle.label = "Full Stroke Mode (compress range)";
+            _uiCleanup.Add(() => plugin.RemoveToggle(fullStrokeToggle));
+
+            var sp1 = plugin.CreateSpacer();
+            sp1.height = 8f;
+            _uiCleanup.Add(() => plugin.RemoveSpacer(sp1));
+
+            // --- Calibration title ---
+            var calTitle = plugin.CreateSpacer();
+            calTitle.height = 40f;
+            _uiCleanup.Add(() => plugin.RemoveSpacer(calTitle));
+            var calText = calTitle.gameObject.AddComponent<UnityEngine.UI.Text>();
+            calText.text      = "Calibration";
+            calText.fontSize  = 28;
+            calText.fontStyle = UnityEngine.FontStyle.Bold;
+            calText.color     = new Color(0.95f, 0.9f, 0.92f);
+            calText.alignment = TextAnchor.MiddleLeft;
+            try
+            {
+                var src = plugin.manager.configurableTextFieldPrefab
+                    .GetComponentInChildren<UnityEngine.UI.Text>();
+                if (src != null) calText.font = src.font;
+            }
+            catch { }
+
+            // --- Calibration controls ---
+            var lengthSlider = plugin.CreateSlider(_referenceLengthScale);
+            lengthSlider.label = "Length Calibration";
+            _uiCleanup.Add(() => plugin.RemoveSlider(lengthSlider));
+
+            var radiusSlider = plugin.CreateSlider(_referenceRadiusScale);
+            radiusSlider.label = "Detection Radius (default 1.0)";
+            _uiCleanup.Add(() => plugin.RemoveSlider(radiusSlider));
+
+            _autoCalButton = plugin.CreateButton("Auto-Calibrate Range (8s)");
+            _autoCalButton.button.onClick.AddListener(() => StartAutoCalibration());
+            _uiCleanup.Add(() => plugin.RemoveButton(_autoCalButton));
+
             var reDetectBtn = plugin.CreateButton("Re-detect Toy Tip & Length");
             reDetectBtn.button.onClick.AddListener(() => AutoDetectToyAxis());
             _uiCleanup.Add(() => plugin.RemoveButton(reDetectBtn));
@@ -1664,36 +1719,27 @@ namespace StrokerSync.MotionSources
             var toyLengthSlider = plugin.CreateSlider(_toyLength);
             toyLengthSlider.label = "Toy Length m (auto-detected)";
             _uiCleanup.Add(() => plugin.RemoveSlider(toyLengthSlider));
+        }
 
-            var femalePopup = plugin.CreateScrollablePopup(_femaleChooser);
-            femalePopup.label = "Receiver (Auto = closest)";
-            femalePopup.popup.onOpenPopupHandlers += () => FindFemales();
-            _uiCleanup.Add(() => plugin.RemovePopup(femalePopup));
+        /// <summary>
+        /// Legacy full-page UI (all controls in left column).
+        /// Used only when MaleFemaleSource is instantiated outside the tab system.
+        /// </summary>
+        public void CreateUI(StrokerSync plugin)
+        {
+            CreateDetectionUI(plugin);
 
-            var targetPopup = plugin.CreateScrollablePopup(_targetChooser);
-            targetPopup.label = "Target Orifice";
-            _uiCleanup.Add(() => plugin.RemovePopup(targetPopup));
+            var display = plugin.CreateTextField(_penRangeDisplay);
+            display.height = 40f;
+            _uiCleanup.Add(() => plugin.RemoveTextField(display));
 
-            var sp2 = plugin.CreateSpacer();
-            _uiCleanup.Add(() => plugin.RemoveSpacer(sp2));
+            var noiseSlider = plugin.CreateSlider(_noiseFilter);
+            noiseSlider.label = "Noise Filter (0=off, 0.2=moderate)";
+            _uiCleanup.Add(() => plugin.RemoveSlider(noiseSlider));
 
-            // --- Stroke Range ---
-            var rangeMinSlider = plugin.CreateSlider(_penRangeMin);
-            rangeMinSlider.label = "Pen Range Min (out position)";
-            _uiCleanup.Add(() => plugin.RemoveSlider(rangeMinSlider));
+            var sp = plugin.CreateSpacer();
+            _uiCleanup.Add(() => plugin.RemoveSpacer(sp));
 
-            var rangeMaxSlider = plugin.CreateSlider(_penRangeMax);
-            rangeMaxSlider.label = "Pen Range Max (in position)";
-            _uiCleanup.Add(() => plugin.RemoveSlider(rangeMaxSlider));
-
-            var fullStrokeToggle = plugin.CreateToggle(_fullStrokeMode);
-            fullStrokeToggle.label = "Full Stroke Mode (compress range to movement)";
-            _uiCleanup.Add(() => plugin.RemoveToggle(fullStrokeToggle));
-
-            var sp3 = plugin.CreateSpacer();
-            _uiCleanup.Add(() => plugin.RemoveSpacer(sp3));
-
-            // --- Auto-Cal on Scene Load ---
             var autoCalToggle = plugin.CreateToggle(_autoCalOnLoad);
             autoCalToggle.label = "Auto-Calibrate on Scene Load";
             _uiCleanup.Add(() => plugin.RemoveToggle(autoCalToggle));
@@ -1713,22 +1759,6 @@ namespace StrokerSync.MotionSources
             var rollingContractSlider = plugin.CreateSlider(_rollingContractRate);
             rollingContractSlider.label = "Rolling Cal Rate (per window)";
             _uiCleanup.Add(() => plugin.RemoveSlider(rollingContractSlider));
-
-            var sp4 = plugin.CreateSpacer();
-            _uiCleanup.Add(() => plugin.RemoveSpacer(sp4));
-
-            // --- Advanced ---
-            var lengthSlider = plugin.CreateSlider(_referenceLengthScale);
-            lengthSlider.label = "Length Calibration";
-            _uiCleanup.Add(() => plugin.RemoveSlider(lengthSlider));
-
-            var radiusSlider = plugin.CreateSlider(_referenceRadiusScale);
-            radiusSlider.label = "Detection Radius (default 1.0)";
-            _uiCleanup.Add(() => plugin.RemoveSlider(radiusSlider));
-
-            var noiseSlider = plugin.CreateSlider(_noiseFilter);
-            noiseSlider.label = "Noise Filter (0=off, 0.2=moderate)";
-            _uiCleanup.Add(() => plugin.RemoveSlider(noiseSlider));
         }
 
         private void StartAutoCalibration()
