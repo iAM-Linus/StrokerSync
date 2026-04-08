@@ -875,7 +875,7 @@ namespace StrokerSync.MotionSources
         /// <summary>Creates the Finger Penetration section (goes in Stroker tab).</summary>
         public void CreatePenetrationUI(StrokerSync plugin)
         {
-            _penetrationUICleanup.Clear();
+            DestroyPenetrationUI();
 
             var spacer = plugin.CreateSpacer(true);
             spacer.height = 40f;
@@ -915,7 +915,7 @@ namespace StrokerSync.MotionSources
         /// <summary>Creates the Clitoral Zone section (goes in Vibration tab).</summary>
         public void CreateClitoralUI(StrokerSync plugin)
         {
-            _clitoralUICleanup.Clear();
+            DestroyClitoralUI();
 
             // Target chooser — placed first so it's obvious who the zone tracks.
             var targetPopup = plugin.CreateScrollablePopup(_femaleChooser, true);

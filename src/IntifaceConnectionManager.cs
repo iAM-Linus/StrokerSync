@@ -20,6 +20,14 @@ namespace StrokerSync
         private string _handyDeviceName;
         private List<DeviceInfo> _connectedDevices = new List<DeviceInfo>();
 
+        // Vibrator device selection
+        // -2 = all vibrators (default), -1 = none, ≥0 = specific device index
+        private int _vibratorDeviceIndex = -2;
+
+        // Vibrator choice constants (stored in the string chooser as the first two entries)
+        public const string VIBRATOR_ALL  = "All vibrators";
+        public const string VIBRATOR_NONE = "None";
+
         // Connection state
         public bool IsConnected => _client != null && _client.IsConnected;
         public bool HasDevice => _handyDeviceIndex >= 0;
@@ -251,6 +259,32 @@ namespace StrokerSync
             });
         }
 
+        /// <summary>
+        /// Set which device receives vibration commands.
+        /// Pass -2 for "all vibrators", -1 for "none", or a specific DeviceIndex.
+        /// </summary>
+        public void SelectVibrator(int deviceIndex)
+        {
+            _vibratorDeviceIndex = deviceIndex;
+            string label = deviceIndex == -2 ? VIBRATOR_ALL
+                         : deviceIndex == -1 ? VIBRATOR_NONE
+                         : $"[{deviceIndex}]";
+            SuperController.LogMessage($"StrokerSync: Vibrator set to {label}");
+        }
+
+        /// <summary>
+        /// Choices list for the vibrator device popup.
+        /// Always starts with "All vibrators" and "None", then specific devices with HasVibrate.
+        /// </summary>
+        public List<string> GetVibratorChoices()
+        {
+            var choices = new List<string> { VIBRATOR_ALL, VIBRATOR_NONE };
+            foreach (var device in _connectedDevices)
+                if (device.HasVibrate)
+                    choices.Add($"[{device.DeviceIndex}] {device.DeviceName}");
+            return choices;
+        }
+
         public void SelectDevice(int deviceIndex)
         {
             foreach (var device in _connectedDevices)
@@ -343,8 +377,37 @@ namespace StrokerSync
         }
 
         /// <summary>
-        /// Broadcasts a vibration command to every connected device that reports
-        /// vibration capability. intensity is clamped 0–1.
+        /// Sends vibration to the device(s) selected by SelectVibrator():
+        ///   -2 (All vibrators) → all HasVibrate devices
+        ///   -1 (None)          → no-op
+        ///   ≥0 (specific)      → that device only (if it HasVibrate)
+        /// </summary>
+        public void SendVibration(float intensity)
+        {
+            if (_client == null || !_client.IsConnected) return;
+            float clamped = Mathf.Clamp01(intensity);
+
+            if (_vibratorDeviceIndex == -1)
+                return; // None
+
+            if (_vibratorDeviceIndex == -2)
+            {
+                // All vibrators
+                foreach (var device in _connectedDevices)
+                    if (device.HasVibrate)
+                        _client.SendVibrateCmd(device.DeviceIndex, clamped);
+                return;
+            }
+
+            // Specific device
+            foreach (var device in _connectedDevices)
+                if (device.DeviceIndex == _vibratorDeviceIndex && device.HasVibrate)
+                    _client.SendVibrateCmd(device.DeviceIndex, clamped);
+        }
+
+        /// <summary>
+        /// Unconditionally broadcasts stop to ALL vibration-capable devices.
+        /// Used for cleanup/disconnect — ignores the vibrator selection.
         /// </summary>
         public void SendVibrateAll(float intensity)
         {

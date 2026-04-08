@@ -23,6 +23,8 @@ namespace StrokerSync.MotionSources
         private readonly MaleFemaleSource _maleFemale = new MaleFemaleSource();
         private readonly FingerSource     _finger     = new FingerSource();
 
+        private JSONStorableBool _blendFingerPenetration;
+
         // =====================================================================
         // PROPERTIES
         // =====================================================================
@@ -37,6 +39,13 @@ namespace StrokerSync.MotionSources
         /// Forward AutoDetectToyAxis from MaleFemaleSource for the overlay panel.
         /// </summary>
         public void AutoDetectToyAxis() => _maleFemale.AutoDetectToyAxis();
+
+        /// <summary>
+        /// When true and both MaleFemale and Finger sources are active,
+        /// the output is an average of both signals instead of picking
+        /// the deeper one.
+        /// </summary>
+        public JSONStorableBool BlendFingerPenetration => _blendFingerPenetration;
 
         // ── MaleFemaleSource storable pass-throughs (used by BuildStrokerTab) ─
         public JSONStorableString MFRangeDisplay    => _maleFemale.PenRangeDisplay;
@@ -55,6 +64,9 @@ namespace StrokerSync.MotionSources
         {
             _maleFemale.OnInitStorables(plugin);
             _finger.OnInitStorables(plugin);
+
+            _blendFingerPenetration = new JSONStorableBool("combined_BlendFingerPenetration", false);
+            plugin.RegisterBool(_blendFingerPenetration);
         }
 
         public void OnInit(StrokerSync plugin)
@@ -77,11 +89,20 @@ namespace StrokerSync.MotionSources
 
             if (mfActive && fActive)
             {
-                // Both penetrating: take whichever is inserted deeper (lower position)
-                if (mfPos <= fPos)
-                { outPos = mfPos; outVelocity = mfVel; }
+                if (_blendFingerPenetration.val)
+                {
+                    // Blend: average both signals
+                    outPos      = (mfPos + fPos) * 0.5f;
+                    outVelocity = (mfVel + fVel) * 0.5f;
+                }
                 else
-                { outPos = fPos;  outVelocity = fVel;  }
+                {
+                    // Default: take whichever is inserted deeper (lower position)
+                    if (mfPos <= fPos)
+                    { outPos = mfPos; outVelocity = mfVel; }
+                    else
+                    { outPos = fPos;  outVelocity = fVel;  }
+                }
             }
             else if (mfActive)
             { outPos = mfPos; outVelocity = mfVel; }
@@ -128,11 +149,14 @@ namespace StrokerSync.MotionSources
         /// </summary>
         public Action BuildFingerPenetrationUI(StrokerSync plugin)
         {
+            var blendToggle = plugin.CreateToggle(_blendFingerPenetration);
+            blendToggle.label = "Blend Finger + Penetration";
 
             _finger.CreatePenetrationUI(plugin);
 
             return () =>
             {
+                plugin.RemoveToggle(blendToggle);
                 _finger.DestroyPenetrationUI();
             };
         }

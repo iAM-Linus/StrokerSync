@@ -1,0 +1,11 @@
+src/StrokerSync.cs
+src/CollapsibleSection.cs
+src/TinyWebSocket.cs
+src/ButtplugClient.cs
+src/IntifaceConnectionManager.cs
+src/LaunchUtils.cs
+src/OverlayPanel.cs
+src/MotionSources/IMotionSource.cs
+src/MotionSources/MaleFemaleSource.cs
+src/MotionSources/FingerSource.cs
+src/MotionSources/CombinedSource.cs
