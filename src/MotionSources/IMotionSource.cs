@@ -25,6 +25,19 @@
         bool OnUpdate(ref float outPos, ref float outVelocity);
 
         /// <summary>
+        /// If the source can deterministically predict the position at a future time,
+        /// return it.  Returns null when no prediction is available (the caller falls
+        /// back to velocity-based extrapolation).
+        ///
+        /// This is used by Timeline Curve Learning: once the curve is accessible the
+        /// source can evaluate BezierAnimationCurve at (clipTime + deltaSeconds) for
+        /// perfect look-ahead, eliminating reversal overshoot entirely.
+        /// </summary>
+        /// <param name="deltaSeconds">How far ahead to predict (typically one send interval).</param>
+        /// <returns>Predicted position in 0–1 source space, or null.</returns>
+        float? PredictPosition(float deltaSeconds);
+
+        /// <summary>
         /// Called when simulator position updates (for visual feedback)
         /// </summary>
         void OnSimulatorUpdate(float prevPos, float newPos, float deltaTime);

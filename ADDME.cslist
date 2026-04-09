@@ -9,3 +9,4 @@ src/MotionSources/IMotionSource.cs
 src/MotionSources/MaleFemaleSource.cs
 src/MotionSources/FingerSource.cs
 src/MotionSources/CombinedSource.cs
+src/MotionSources/TimelineCurveAccess.cs

@@ -32,7 +32,8 @@ namespace StrokerSync
 
         // Quick-access overlay panel
         private OverlayPanel _overlayPanel;
-        private JSONStorableBool _pauseHandy;
+        private JSONStorableBool _pauseStroker;
+        private JSONStorableBool _pauseVibration;
         private JSONStorableFloat _simulatorPosition;
         private JSONStorableFloat _strokeZoneMin;
         private JSONStorableFloat _strokeZoneMax;
@@ -214,7 +215,10 @@ namespace StrokerSync
                 });
             RegisterStringChooser(_vibratorChooser);
 
-            _pauseHandy = new JSONStorableBool("pauseHandy", true, (bool paused) =>
+            _pauseStroker = new JSONStorableBool("pauseStroker", true);
+            RegisterBool(_pauseStroker);
+
+            _pauseVibration = new JSONStorableBool("pauseVibration", true, (bool paused) =>
             {
                 // When pausing, immediately stop all vibrators so they don't linger.
                 if (paused && _vibrationActive && _connectionManager != null)
@@ -224,7 +228,7 @@ namespace StrokerSync
                     _connectionManager.SendVibrateAll(0f);
                 }
             });
-            RegisterBool(_pauseHandy);
+            RegisterBool(_pauseVibration);
 
             _simulatorPosition = new JSONStorableFloat("simulatorPosition", 0.0f, 0.0f, 1.0f);
             RegisterFloat(_simulatorPosition);
@@ -498,9 +502,13 @@ namespace StrokerSync
             _tabCleanup.Add(() => RemoveButton(vibBtn));
 
             // ── Right column ─────────────────────────────────────────────────
-            var pauseToggle = CreateToggle(_pauseHandy, true);
-            pauseToggle.label = "Pause Device";
-            _tabCleanup.Add(() => RemoveToggle(pauseToggle));
+            var pauseStrokerToggle = CreateToggle(_pauseStroker, true);
+            pauseStrokerToggle.label = "Pause Stroker";
+            _tabCleanup.Add(() => RemoveToggle(pauseStrokerToggle));
+
+            var pauseVibrationToggle = CreateToggle(_pauseVibration, true);
+            pauseVibrationToggle.label = "Pause Vibration";
+            _tabCleanup.Add(() => RemoveToggle(pauseVibrationToggle));
 
             var manualSlider = CreateSlider(_simulatorPosition, true);
             manualSlider.label = "Position (manual)";
@@ -576,6 +584,11 @@ namespace StrokerSync
             // ── Left — detection / selection / range controls ─────────────────
             sec.CreateTitle("Penis / Toy Penetration");
             sec.OnRemove(_combinedSource.BuildMaleFemaleUI(this));
+
+            // ── Left — Timeline curve learning ───────────────────────────────
+            sec.CreateSpacer().height = 8f;
+            sec.CreateTitle("Timeline Curve Learning");
+            sec.OnRemove(_combinedSource.BuildTimelineCurveUI(this));
 
             // ── Right — signal display (top of right column) ──────────────────
             var rangeDisplay = sec.CreateTextField(_combinedSource.MFRangeDisplay, true);
@@ -765,7 +778,7 @@ namespace StrokerSync
             bool hasClitoral = clitIntensity.HasValue;
 
             // Clitoral vibration respects pause but NOT VibrationMode — it is its own path.
-            bool canSendClit = hasClitoral && !_pauseHandy.val
+            bool canSendClit = hasClitoral && !_pauseVibration.val
                 && _connectionManager != null && _connectionManager.IsConnected;
 
             if (canSendClit)
@@ -810,7 +823,7 @@ namespace StrokerSync
             _simulatorTarget = Mathf.Clamp01(pos);
             _simulatorSpeed = Mathf.Clamp01(velocity);
 
-            if (!_isInitialized || _pauseHandy.val || _connectionManager == null || !_connectionManager.HasDevice)
+            if (!_isInitialized || _pauseStroker.val || _connectionManager == null || !_connectionManager.HasDevice)
                 return;
 
             float mappedPos = Mathf.Lerp(_strokeZoneMin.val, _strokeZoneMax.val, pos);
@@ -872,12 +885,25 @@ namespace StrokerSync
 
             _sendAccumulator -= sendInterval;
 
-            // --- LOOK-AHEAD: VELOCITY EXTRAPOLATION ---
-            // At stroke reversals, suppress extrapolation: send current position so the
-            // device decelerates into the turnaround instead of overshooting and snapping back.
-            float extrapolatedPos = _isReversing
-                ? mappedPos
-                : mappedPos + _signedVelocity * sendInterval;
+            // --- LOOK-AHEAD ---
+            // Strategy A: if Timeline curve access is available, evaluate the curve
+            // at (clipTime + sendInterval) for deterministic look-ahead.  This is
+            // perfect at reversals — no overshoot, no reactive suppression needed.
+            // Fallback: velocity-based extrapolation with reversal suppression.
+            float extrapolatedPos;
+            float? predicted = _combinedSource.PredictPosition(sendInterval);
+            if (predicted.HasValue)
+            {
+                // Map predicted source-space position through stroke zone
+                extrapolatedPos = Mathf.Lerp(_strokeZoneMin.val, _strokeZoneMax.val, predicted.Value);
+            }
+            else
+            {
+                // Velocity extrapolation fallback — suppress at stroke reversals
+                extrapolatedPos = _isReversing
+                    ? mappedPos
+                    : mappedPos + _signedVelocity * sendInterval;
+            }
 
             extrapolatedPos = Mathf.Clamp01(extrapolatedPos);
 
@@ -938,7 +964,7 @@ namespace StrokerSync
 
             // Vibration: not gated by stroke advance filter — depth and velocity track continuously.
             // Runs at the same rate as the linear command (shared accumulator).
-            if (_vibrationMode.val != "Off" && !_pauseHandy.val)
+            if (_vibrationMode.val != "Off" && !_pauseVibration.val)
             {
                 float vibIntensity = ComputeVibrationIntensity(mappedPos, _signedVelocity)
                                      * _vibrationIntensityScale.val;

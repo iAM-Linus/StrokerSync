@@ -6,12 +6,21 @@ namespace StrokerSync.MotionSources
 {
     /// <summary>
     /// Combined penetration source — runs MaleFemaleSource (penis / toy) and
-    /// FingerSource (finger penetration + clitoral stimulation) simultaneously.
+    /// FingerSource (finger penetration + clitoral stimulation) simultaneously,
+    /// with optional Timeline Curve Learning for deterministic look-ahead.
     ///
     /// PENETRATION MERGE RULE:
     ///   If both sources detect penetration in the same frame, take the signal
     ///   with the lower outPos (0 = device fully down = fully inserted).
     ///   This keeps the device stroke in sync with whichever is deepest.
+    ///
+    /// TIMELINE CURVE LEARNING:
+    ///   When enabled, TimelineCurveAccess auto-detects VAM Timeline in the
+    ///   scene, reads clip time from the "Scrubber" storable, and records the
+    ///   physics-tracked position over one full animation loop.  After the loop
+    ///   completes, PredictPosition() returns interpolated look-ahead values
+    ///   from the recorded table — eliminating velocity extrapolation overshoot.
+    ///   The physics sources ALWAYS remain the primary position source.
     ///
     /// CLITORAL:
     ///   FingerSource.ClitoralIntensity is always exposed via this class regardless
@@ -24,6 +33,13 @@ namespace StrokerSync.MotionSources
         private readonly FingerSource     _finger     = new FingerSource();
 
         private JSONStorableBool _blendFingerPenetration;
+        private JSONStorableBool _timelineCurveLearning;
+
+        // Timeline curve recording — auto-detects Timeline, records physics
+        // position indexed by clip time, provides look-ahead after one loop.
+        private readonly TimelineCurveAccess _curveAccess = new TimelineCurveAccess();
+        private JSONStorableString _curveStatus;
+        private JSONStorableAction _reRecordCurve;
 
         // =====================================================================
         // PROPERTIES
@@ -47,6 +63,11 @@ namespace StrokerSync.MotionSources
         /// </summary>
         public JSONStorableBool BlendFingerPenetration => _blendFingerPenetration;
 
+        /// <summary>
+        /// When true, Timeline auto-detection and curve recording are active.
+        /// </summary>
+        public JSONStorableBool TimelineCurveLearning => _timelineCurveLearning;
+
         // ── MaleFemaleSource storable pass-throughs (used by BuildStrokerTab) ─
         public JSONStorableString MFRangeDisplay    => _maleFemale.PenRangeDisplay;
         public JSONStorableFloat  MFNoiseFilter     => _maleFemale.NoiseFilter;
@@ -67,17 +88,26 @@ namespace StrokerSync.MotionSources
 
             _blendFingerPenetration = new JSONStorableBool("combined_BlendFingerPenetration", false);
             plugin.RegisterBool(_blendFingerPenetration);
+
+            _timelineCurveLearning = new JSONStorableBool("combined_TimelineCurveLearning", false);
+            plugin.RegisterBool(_timelineCurveLearning);
+
+            _curveStatus = new JSONStorableString("combined_CurveStatus", "");
+            plugin.RegisterString(_curveStatus);
+
+            _reRecordCurve = new JSONStorableAction("combined_ReRecordCurve",
+                () => _curveAccess.ForceReRecord());
         }
 
         public void OnInit(StrokerSync plugin)
         {
-            // Logic only — UI is built by StrokerSync's tab system
             _maleFemale.InitLogic(plugin);
             _finger.InitLogic(plugin);
         }
 
         public bool OnUpdate(ref float outPos, ref float outVelocity)
         {
+            // --- Physics sources (ALWAYS the primary position source) ---
             float mfPos = 0f, mfVel = 0f;
             float fPos  = 0f, fVel  = 0f;
 
@@ -85,31 +115,64 @@ namespace StrokerSync.MotionSources
             bool fActive  = _finger.OnUpdate(ref fPos,  ref fVel);
 
             if (!mfActive && !fActive)
+            {
+                // No physics data — still feed zero to curve recorder if enabled
+                if (_timelineCurveLearning.val)
+                {
+                    _curveAccess.Update(0f);
+                    _curveStatus.val = _curveAccess.Status;
+                }
                 return false;
+            }
+
+            // Merge physics signals
+            float physicsPos, physicsVel;
 
             if (mfActive && fActive)
             {
                 if (_blendFingerPenetration.val)
                 {
-                    // Blend: average both signals
-                    outPos      = (mfPos + fPos) * 0.5f;
-                    outVelocity = (mfVel + fVel) * 0.5f;
+                    physicsPos = (mfPos + fPos) * 0.5f;
+                    physicsVel = (mfVel + fVel) * 0.5f;
                 }
                 else
                 {
-                    // Default: take whichever is inserted deeper (lower position)
                     if (mfPos <= fPos)
-                    { outPos = mfPos; outVelocity = mfVel; }
+                    { physicsPos = mfPos; physicsVel = mfVel; }
                     else
-                    { outPos = fPos;  outVelocity = fVel;  }
+                    { physicsPos = fPos;  physicsVel = fVel;  }
                 }
             }
             else if (mfActive)
-            { outPos = mfPos; outVelocity = mfVel; }
+            { physicsPos = mfPos; physicsVel = mfVel; }
             else
-            { outPos = fPos;  outVelocity = fVel;  }
+            { physicsPos = fPos;  physicsVel = fVel;  }
 
+            // --- Timeline curve recording ---
+            // Feed the physics position to the recorder every frame.
+            // TimelineCurveAccess reads clip time from Timeline's Scrubber storable
+            // and pairs it with this physics position.
+            if (_timelineCurveLearning.val)
+            {
+                _curveAccess.Update(physicsPos);
+                _curveStatus.val = _curveAccess.Status;
+            }
+
+            outPos      = physicsPos;
+            outVelocity = physicsVel;
             return true;
+        }
+
+        /// <summary>
+        /// Deterministic look-ahead via the recorded Timeline curve.
+        /// Returns null when curve learning is off or curve not yet recorded,
+        /// causing the caller to fall back to velocity extrapolation.
+        /// </summary>
+        public float? PredictPosition(float deltaSeconds)
+        {
+            if (!_timelineCurveLearning.val || !_curveAccess.IsReady)
+                return null;
+            return _curveAccess.PredictPosition(deltaSeconds);
         }
 
         public void OnSimulatorUpdate(float prevPos, float newPos, float deltaTime)
@@ -119,7 +182,6 @@ namespace StrokerSync.MotionSources
 
         public void OnDestroy(StrokerSync plugin)
         {
-            // Non-UI teardown only — UI is removed by the tab-rebuild cleanup list
             _finger.DestroyLogic(plugin);
         }
 
@@ -127,6 +189,7 @@ namespace StrokerSync.MotionSources
         {
             _maleFemale.OnSceneLoaded(plugin);
             _finger.OnSceneLoaded(plugin);
+            _curveAccess.Invalidate();
         }
 
         // =====================================================================
@@ -135,8 +198,6 @@ namespace StrokerSync.MotionSources
 
         /// <summary>
         /// Builds left-column detection/selection/range UI for the Stroker page.
-        /// Calibration controls and the signal display are created separately by
-        /// BuildStrokerTab so they can be placed precisely in the right column.
         /// </summary>
         public Action BuildMaleFemaleUI(StrokerSync plugin)
         {
@@ -145,7 +206,7 @@ namespace StrokerSync.MotionSources
         }
 
         /// <summary>
-        /// Builds UI for finger / dildo penetration tracking (Penetration page, left column).
+        /// Builds UI for finger / dildo penetration tracking (Penetration page).
         /// </summary>
         public Action BuildFingerPenetrationUI(StrokerSync plugin)
         {
@@ -161,7 +222,7 @@ namespace StrokerSync.MotionSources
             };
         }
 
-        /// <summary>Legacy combined UI — use BuildMaleFemaleUI + BuildFingerPenetrationUI instead.</summary>
+        /// <summary>Legacy combined UI.</summary>
         public Action BuildStrokerUI(StrokerSync plugin)
         {
             var mfCleanup = BuildMaleFemaleUI(plugin);
@@ -172,18 +233,38 @@ namespace StrokerSync.MotionSources
 
         /// <summary>
         /// Builds clitoral UI for the Vibration tab (left column).
-        /// The returned cleanup action removes all created elements.
         /// </summary>
         public Action BuildVibrationUI(StrokerSync plugin)
         {
-            var sep    = plugin.CreateSpacer();
-
+            var sep = plugin.CreateSpacer();
             _finger.CreateClitoralUI(plugin);
 
             return () =>
             {
                 plugin.RemoveSpacer(sep);
                 _finger.DestroyClitoralUI();
+            };
+        }
+
+        /// <summary>
+        /// Builds UI for Timeline Curve Learning — toggle, status, and re-record button.
+        /// </summary>
+        public Action BuildTimelineCurveUI(StrokerSync plugin)
+        {
+            var toggle = plugin.CreateToggle(_timelineCurveLearning);
+            toggle.label = "Timeline Curve Learning";
+
+            var statusField = plugin.CreateTextField(_curveStatus);
+            statusField.height = 50f;
+
+            var reRecordBtn = plugin.CreateButton("Re-record Curve");
+            reRecordBtn.button.onClick.AddListener(() => _curveAccess.ForceReRecord());
+
+            return () =>
+            {
+                plugin.RemoveToggle(toggle);
+                plugin.RemoveTextField(statusField);
+                plugin.RemoveButton(reRecordBtn);
             };
         }
     }

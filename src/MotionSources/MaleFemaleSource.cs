@@ -425,6 +425,7 @@ namespace StrokerSync.MotionSources
             return true;
         }
 
+        public float? PredictPosition(float deltaSeconds) { return null; }
         public void OnSimulatorUpdate(float prevPos, float newPos, float deltaTime) { }
         public void OnDestroy(StrokerSync plugin)
         {
@@ -633,7 +634,7 @@ namespace StrokerSync.MotionSources
                 }
                 if (expanded)
                 {
-                    SuperController.LogMessage($"StrokerSync: Rolling cal expanded range: {_penRangeMin.val:F2} - {_penRangeMax.val:F2}");
+                    // SuperController.LogMessage($"StrokerSync: Rolling cal expanded range: {_penRangeMin.val:F2} - {_penRangeMax.val:F2}");
                 }
             }
 

@@ -457,6 +457,7 @@ namespace StrokerSync.MotionSources
 
             if (!clitoralActive)
             {
+                ClitoralIntensity = null;
                 if (_clitoralWasActive)
                 {
                     _clitoralWasActive = false;
@@ -516,6 +517,7 @@ namespace StrokerSync.MotionSources
             return false;
         }
 
+        public float? PredictPosition(float deltaSeconds) { return null; }
         public void OnSimulatorUpdate(float prevPos, float newPos, float deltaTime) { }
 
         public void OnDestroy(StrokerSync plugin)
