@@ -223,37 +223,53 @@ namespace StrokerSync.MotionSources
                 return;
             }
 
-            // --- RECORDING ---
+            // --- RECORDING & LOOP WRAP DETECTION ---
+
+            // Detect if the playhead just wrapped backward (e.g. loop restarted)
+            // Using 0.3f threshold to ignore engine audio sync jitter
+            bool justWrapped = (_prevClipTime > 0f && clipTime < _prevClipTime - 0.3f);
+
+            // Also treat jumping to the absolute beginning of the timeline as a wrap
+            // (useful for when the user hits the stop/play reset button)
+            if (clipTime < 0.05f && _prevClipTime >= 0.05f)
+            {
+                justWrapped = true;
+            }
 
             if (!_isRecording)
             {
-                // Start recording near the beginning of a loop
-                if (clipTime < 0.1f || _sampleTimes.Count == 0)
+                // ONLY start recording when a loop boundary is crossed.
+                // If we clear the curve mid-clip, we wait patiently for it to loop.
+                // This guarantees we capture a full, complete cycle.
+                if (justWrapped || (clipTime < 0.1f && _sampleTimes.Count == 0))
                 {
                     _isRecording = true;
                     ClearRecording();
                     _prevClipTime = clipTime;
                     _recordedAnimation = _animationParam != null ? _animationParam.val : null;
                     AddSample(clipTime, physicsPosition);
-                    return;
+                }
+                else
+                {
+                    _prevClipTime = clipTime;
                 }
                 return;
             }
 
-            // Detect loop wrap: clipTime decreased significantly
-            if (clipTime < _prevClipTime - 0.05f)
+            // We are currently recording. Stop when the loop wraps.
+            if (justWrapped)
             {
                 if (_sampleTimes.Count >= MIN_SAMPLES)
                 {
                     FinalizeRecording();
-                    return;
                 }
                 else
                 {
                     ClearRecording();
                     _isRecording = false;
-                    return;
                 }
+                _prevClipTime = clipTime;
+                return;
             }
 
             // Record forward-progressing samples

@@ -93,7 +93,7 @@ namespace StrokerSync.MotionSources
         // --- Penetration Range Mapping ---
         private JSONStorableFloat _penRangeMin;
         private JSONStorableFloat _penRangeMax;
-        private JSONStorableBool  _fullStrokeMode;   // when true, rolling cal tracks range bidirectionally
+        private JSONStorableBool _fullStrokeMode;   // when true, rolling cal tracks range bidirectionally
         private JSONStorableString _penRangeDisplay;
 
         // Auto-calibration state (manual button)
@@ -187,13 +187,13 @@ namespace StrokerSync.MotionSources
         }
 
         // ── Storable accessors for tab-based UI layout ─────────────────────────
-        public JSONStorableString PenRangeDisplay   => _penRangeDisplay;
-        public JSONStorableFloat  NoiseFilter        => _noiseFilter;
-        public JSONStorableBool   AutoCalOnLoad      => _autoCalOnLoad;
-        public JSONStorableFloat  AutoCalDelay       => _autoCalDelay;
-        public JSONStorableBool   RollingCal         => _rollingCalEnabled;
-        public JSONStorableFloat  RollingWindowSecs  => _rollingWindowSecs;
-        public JSONStorableFloat  RollingContractRate => _rollingContractRate;
+        public JSONStorableString PenRangeDisplay => _penRangeDisplay;
+        public JSONStorableFloat NoiseFilter => _noiseFilter;
+        public JSONStorableBool AutoCalOnLoad => _autoCalOnLoad;
+        public JSONStorableFloat AutoCalDelay => _autoCalDelay;
+        public JSONStorableBool RollingCal => _rollingCalEnabled;
+        public JSONStorableFloat RollingWindowSecs => _rollingWindowSecs;
+        public JSONStorableFloat RollingContractRate => _rollingContractRate;
 
         public void OnInitStorables(StrokerSync plugin)
         {
@@ -482,9 +482,7 @@ namespace StrokerSync.MotionSources
             plugin.StartCoroutine(DelayedInit());
         }
 
-        // =====================================================================
-        // NOISE FILTERING
-        // =====================================================================
+        #region NOISE FILTERING
 
         /// <summary>
         /// Two-stage noise filter optimized for minimum latency:
@@ -561,9 +559,9 @@ namespace StrokerSync.MotionSources
             }
         }
 
-        // =====================================================================
-        // AUTO-CALIBRATION
-        // =====================================================================
+        #endregion
+
+        #region AUTO-CALIBRATION
 
         private void UpdateAutoCalibration(float rawDepth)
         {
@@ -596,9 +594,9 @@ namespace StrokerSync.MotionSources
             }
         }
 
-        // =====================================================================
-        // ROLLING CALIBRATION
-        // =====================================================================
+        #endregion
+
+        #region ROLLING CALIBRATION
 
         /// <summary>
         /// Continuously adapts the penetration range during play:
@@ -700,9 +698,9 @@ namespace StrokerSync.MotionSources
             }
         }
 
-        // =====================================================================
-        // PENIS TRACKING (cached - runs every frame but no allocations)
-        // =====================================================================
+        #endregion
+
+        #region PENIS TRACKING (cached - runs every frame but no allocations)
 
         private bool UpdateMalePhysics()
         {
@@ -715,11 +713,11 @@ namespace StrokerSync.MotionSources
                 if (toyAtom == null || !toyAtom.on) return false;
                 var ctrl = toyAtom.mainController;
                 if (ctrl == null) return false;
-                _penisBase      = ctrl.transform.position;
+                _penisBase = ctrl.transform.position;
                 _penisDirection = GetToyAxis(ctrl.transform);
-                _penisLength    = (_toyLength != null) ? _toyLength.val : 0.18f;
-                _penisTip       = _penisBase + _penisDirection * _penisLength;
-                _penisRadius    = 0.02f;
+                _penisLength = (_toyLength != null) ? _toyLength.val : 0.18f;
+                _penisTip = _penisBase + _penisDirection * _penisLength;
+                _penisRadius = 0.02f;
                 return true;
             }
 
@@ -833,18 +831,18 @@ namespace StrokerSync.MotionSources
             string axis = (_toyAxis != null) ? _toyAxis.val : "+Y (Up)";
             switch (axis)
             {
-                case "+Z (Forward)": return  t.forward;
-                case "-Z (Back)":    return -t.forward;
-                case "+X (Right)":   return  t.right;
-                case "-X (Left)":    return -t.right;
-                case "-Y (Down)":    return -t.up;
-                default:             return  t.up;   // "+Y (Up)"
+                case "+Z (Forward)": return t.forward;
+                case "-Z (Back)": return -t.forward;
+                case "+X (Right)": return t.right;
+                case "-X (Left)": return -t.right;
+                case "-Y (Down)": return -t.up;
+                default: return t.up;   // "+Y (Up)"
             }
         }
 
-        // =====================================================================
-        // CACHE VALIDATION
-        // =====================================================================
+        #endregion
+
+        #region CACHE VALIDATION
 
         /// <summary>
         /// Verify cached component references are still alive. Atom reloads
@@ -906,9 +904,9 @@ namespace StrokerSync.MotionSources
             }
         }
 
-        // =====================================================================
-        // FEMALE/TARGET TRACKING (cached)
-        // =====================================================================
+        #endregion
+
+        #region FEMALE/TARGET TRACKING (cached)
 
         private bool UpdateFemaleTarget()
         {
@@ -1256,9 +1254,9 @@ namespace StrokerSync.MotionSources
             }
         }
 
-        // =====================================================================
-        // PENETRATION DEPTH CALCULATION
-        // =====================================================================
+        #endregion
+
+        #region PENETRATION DEPTH CALCULATION
 
         private float CalculatePenetrationDepth()
         {
@@ -1294,9 +1292,9 @@ namespace StrokerSync.MotionSources
             return strokePosition;
         }
 
-        // =====================================================================
-        // UTILITIES
-        // =====================================================================
+        #endregion
+
+        #region UTILITIES
 
         private void LogDebugThrottled(string msg)
         {
@@ -1327,9 +1325,9 @@ namespace StrokerSync.MotionSources
             return _runningLengthSum / PENIS_LENGTH_AVERAGES_COUNT;
         }
 
-        // =====================================================================
-        // AUTO-SELECT (runs on timer, not every frame)
-        // =====================================================================
+        #endregion
+
+        #region AUTO-SELECT (runs on timer, not every frame)
 
         private void RunAutoSelect()
         {
@@ -1406,9 +1404,9 @@ namespace StrokerSync.MotionSources
             }
         }
 
-        // =====================================================================
-        // ATOM LIST / UI
-        // =====================================================================
+        #endregion
+
+        #region ATOM LIST / UI
 
         private static bool HasPenisAnatomy(Atom a)
         {
@@ -1523,20 +1521,20 @@ namespace StrokerSync.MotionSources
                 Bounds b = col.bounds;
                 // 8 AABB corners
                 for (int xi = 0; xi < 2; xi++)
-                for (int yi = 0; yi < 2; yi++)
-                for (int zi = 0; zi < 2; zi++)
-                {
-                    Vector3 corner = new Vector3(
-                        xi == 0 ? b.min.x : b.max.x,
-                        yi == 0 ? b.min.y : b.max.y,
-                        zi == 0 ? b.min.z : b.max.z);
-                    float dSqr = (corner - ctrlPos).sqrMagnitude;
-                    if (dSqr > maxDistSqr)
-                    {
-                        maxDistSqr = dSqr;
-                        furthestPoint = corner;
-                    }
-                }
+                    for (int yi = 0; yi < 2; yi++)
+                        for (int zi = 0; zi < 2; zi++)
+                        {
+                            Vector3 corner = new Vector3(
+                                xi == 0 ? b.min.x : b.max.x,
+                                yi == 0 ? b.min.y : b.max.y,
+                                zi == 0 ? b.min.z : b.max.z);
+                            float dSqr = (corner - ctrlPos).sqrMagnitude;
+                            if (dSqr > maxDistSqr)
+                            {
+                                maxDistSqr = dSqr;
+                                furthestPoint = corner;
+                            }
+                        }
             }
 
             if (maxDistSqr < 0.0001f)
@@ -1546,10 +1544,10 @@ namespace StrokerSync.MotionSources
             }
 
             Vector3 worldDir = (furthestPoint - ctrlPos).normalized;
-            string bestAxis  = WorldDirToNearestLocalAxis(ctrl, worldDir);
-            float  length    = Mathf.Clamp(Mathf.Sqrt(maxDistSqr), 0.03f, 0.45f);
+            string bestAxis = WorldDirToNearestLocalAxis(ctrl, worldDir);
+            float length = Mathf.Clamp(Mathf.Sqrt(maxDistSqr), 0.03f, 0.45f);
 
-            if (_toyAxis   != null) _toyAxis.val   = bestAxis;
+            if (_toyAxis != null) _toyAxis.val = bestAxis;
             if (_toyLength != null) _toyLength.val = length;
 
             SuperController.LogMessage($"StrokerSync: Auto-detected toy axis={bestAxis}, length={length:F3}m on '{toyAtom.uid}'");
@@ -1562,20 +1560,20 @@ namespace StrokerSync.MotionSources
         /// </summary>
         private static string WorldDirToNearestLocalAxis(Transform t, Vector3 worldDir)
         {
-            float dotUp      = Vector3.Dot(worldDir,  t.up);
-            float dotDown    = Vector3.Dot(worldDir, -t.up);
-            float dotFwd     = Vector3.Dot(worldDir,  t.forward);
-            float dotBack    = Vector3.Dot(worldDir, -t.forward);
-            float dotRight   = Vector3.Dot(worldDir,  t.right);
-            float dotLeft    = Vector3.Dot(worldDir, -t.right);
+            float dotUp = Vector3.Dot(worldDir, t.up);
+            float dotDown = Vector3.Dot(worldDir, -t.up);
+            float dotFwd = Vector3.Dot(worldDir, t.forward);
+            float dotBack = Vector3.Dot(worldDir, -t.forward);
+            float dotRight = Vector3.Dot(worldDir, t.right);
+            float dotLeft = Vector3.Dot(worldDir, -t.right);
 
             float best = dotUp;
             string name = "+Y (Up)";
-            if (dotDown  > best) { best = dotDown;  name = "-Y (Down)"; }
-            if (dotFwd   > best) { best = dotFwd;   name = "+Z (Forward)"; }
-            if (dotBack  > best) { best = dotBack;  name = "-Z (Back)"; }
+            if (dotDown > best) { best = dotDown; name = "-Y (Down)"; }
+            if (dotFwd > best) { best = dotFwd; name = "+Z (Forward)"; }
+            if (dotBack > best) { best = dotBack; name = "-Z (Back)"; }
             if (dotRight > best) { best = dotRight; name = "+X (Right)"; }
-            if (dotLeft  > best) {                  name = "-X (Left)"; }
+            if (dotLeft > best) { name = "-X (Left)"; }
             return name;
         }
 
@@ -1682,10 +1680,10 @@ namespace StrokerSync.MotionSources
             calTitle.height = 40f;
             _uiCleanup.Add(() => plugin.RemoveSpacer(calTitle));
             var calText = calTitle.gameObject.AddComponent<UnityEngine.UI.Text>();
-            calText.text      = "Calibration";
-            calText.fontSize  = 28;
+            calText.text = "Calibration";
+            calText.fontSize = 28;
             calText.fontStyle = UnityEngine.FontStyle.Bold;
-            calText.color     = new Color(0.95f, 0.9f, 0.92f);
+            calText.color = new Color(0.95f, 0.9f, 0.92f);
             calText.alignment = TextAnchor.MiddleLeft;
             try
             {
@@ -1788,5 +1786,7 @@ namespace StrokerSync.MotionSources
                 StartAutoCalibration();
             }
         }
+
+        #endregion
     }
 }

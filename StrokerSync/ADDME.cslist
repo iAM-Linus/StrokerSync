@@ -9,4 +9,6 @@ src/MotionSources/IMotionSource.cs
 src/MotionSources/MaleFemaleSource.cs
 src/MotionSources/FingerSource.cs
 src/MotionSources/CombinedSource.cs
+src/MotionSources/OralSource.cs
 src/MotionSources/TimelineCurveAccess.cs
+src/MotionSources/SoloSource.cs

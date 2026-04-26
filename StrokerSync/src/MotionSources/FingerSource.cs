@@ -4,44 +4,10 @@ using UnityEngine;
 
 namespace StrokerSync.MotionSources
 {
-    /// <summary>
-    /// Finger-based motion source — detects fingertip penetration of the vaginal
-    /// trigger zone and clitoral / labial stimulation.
-    ///
-    /// SIGNAL PATH (penetration):
-    ///   Fingertip position projected onto vaginal axis
-    ///   → Normalized depth (0 = not inserted, 1 = fully inserted)
-    ///   → Hysteresis
-    ///   → Invert (1.0 = device at top / finger out, 0.0 = device at bottom / finger in)
-    ///   → LinearCmd via StrokerSync
-    ///
-    /// SIGNAL PATH (clitoral):
-    ///   Per-frame proximity check: is any fingertip within _clitoralRadius of the
-    ///   clitoral zone centre (LabiaTrigger + pelvis-relative offset)?
-    ///   The zone is a kinematic GO repositioned via MovePosition each frame; its
-    ///   visual indicator sphere lets you see and tune the position in the viewport.
-    ///   (Unity OnTriggerEnter is NOT used — finger bone rigidbodies carry no collider
-    ///   geometry so trigger callbacks never fire for them.)
-    ///   Movement speed of the closest finger in zone → clitoral intensity (0–1)
-    ///   → Exposed via ClitoralIntensity property
-    ///   → StrokerSync reads this and calls SendVibrateAll() when vibration mode != Off
-    ///
-    /// FINGER BONE NAMES: L_Finger_Index_C, L_Finger_Middle_C (left)
-    ///                    R_Finger_Index_C, R_Finger_Middle_C (right)
-    ///   (_C = distal phalanx / fingertip; found on CoreControl, [CameraRig], Person atoms)
-    /// </summary>
     public class FingerSource : IMotionSource
     {
-        // =====================================================================
-        // NESTED: Clitoral Trigger Zone
-        // =====================================================================
+        #region Clitoral Trigger Zone
 
-        /// <summary>
-        /// MonoBehaviour attached to the dynamically-created clitoral trigger sphere.
-        /// Tracks which finger rigidbodies are currently inside it using Unity physics
-        /// OnTriggerEnter / OnTriggerExit callbacks. Thread-safe because Unity only
-        /// calls these from the main thread during the physics step.
-        /// </summary>
         private class ClitoralTriggerZone : MonoBehaviour
         {
             private HashSet<string> _fingerNames;
@@ -86,7 +52,6 @@ namespace StrokerSync.MotionSources
                 }
             }
 
-            /// <summary>Called when the source is destroyed or scene reloads.</summary>
             public void Reset()
             {
                 _activeRbIds.Clear();
@@ -94,9 +59,9 @@ namespace StrokerSync.MotionSources
             }
         }
 
-        // =====================================================================
-        // CONSTANTS
-        // =====================================================================
+        #endregion
+
+        #region Constants
 
         private const string FEMALE_AUTO = "*Auto*";
 
@@ -142,9 +107,9 @@ namespace StrokerSync.MotionSources
         private const float FINGER_CACHE_INTERVAL     = 2.0f;
         private const float CACHE_VALIDATION_INTERVAL = 2.0f;
 
-        // =====================================================================
-        // FIELDS
-        // =====================================================================
+        #endregion
+
+        #region Fields
 
         private StrokerSync _plugin;
         private SuperController Controller => SuperController.singleton;
@@ -191,6 +156,14 @@ namespace StrokerSync.MotionSources
         /// </summary>
         public float? ClitoralIntensity { get; private set; }
 
+        /// <summary>
+        /// World-space centre of the clitoral zone this frame.
+        /// Null when the receiver atom has not been resolved yet.
+        /// Shared with OralSource so that oral detection uses the same zone
+        /// the clitoral indicator sphere represents.
+        /// </summary>
+        public Vector3? ClitoralZonePosition { get; private set; }
+
         // --- Settings ---
         private JSONStorableFloat _maxFingerDepth;         // Insertable finger depth (m)
         private JSONStorableFloat _clitoralSensitivity;  // Speed → intensity gain
@@ -204,9 +177,9 @@ namespace StrokerSync.MotionSources
         private readonly List<Action> _penetrationUICleanup = new List<Action>();
         private readonly List<Action> _clitoralUICleanup    = new List<Action>();
 
-        // =====================================================================
-        // IMOTIONSOURCE — INIT
-        // =====================================================================
+        #endregion
+
+        #region IMotionSource — Init
 
         public void OnInitStorables(StrokerSync plugin)
         {
@@ -289,13 +262,14 @@ namespace StrokerSync.MotionSources
             CacheFingerTips();
         }
 
-        // =====================================================================
-        // IMOTIONSOURCE — UPDATE
-        // =====================================================================
+        #endregion
+
+        #region IMotionSource — Update
 
         public bool OnUpdate(ref float outPos, ref float outVelocity)
         {
-            ClitoralIntensity = null;
+            ClitoralIntensity    = null;
+            ClitoralZonePosition = null;
 
             // Periodic refresh: finger transforms
             _fingerCacheTimer -= Time.deltaTime;
@@ -347,6 +321,9 @@ namespace StrokerSync.MotionSources
                     + _cachedPelvis.forward * _clitoralOffsetFwd.val
                     + _cachedPelvis.up      * _clitoralOffsetUp.val
                 : labiaPos;
+
+            // Publish so OralSource can share the same zone centre.
+            ClitoralZonePosition = clitoralZonePos;
 
             if (_clitoralTriggerRb != null)
                 _clitoralTriggerRb.MovePosition(clitoralZonePos);
@@ -563,9 +540,9 @@ namespace StrokerSync.MotionSources
             _prevClitoralFingerPosTime = 0f;
         }
 
-        // =====================================================================
-        // CLITORAL TRIGGER MANAGEMENT
-        // =====================================================================
+        #endregion
+
+        #region Clitoral Trigger Management
 
         /// <summary>
         /// Creates a kinematic sphere trigger at the default pelvis-relative position.
@@ -682,9 +659,9 @@ namespace StrokerSync.MotionSources
             }
         }
 
-        // =====================================================================
-        // VAGINAL DIRECTION
-        // =====================================================================
+        #endregion
+
+        #region Vaginal Direction
 
         private Vector3 ComputeVaginalDirection(Vector3 labiaPos)
         {
@@ -708,9 +685,9 @@ namespace StrokerSync.MotionSources
             return Vector3.Slerp(pelvisRef, raw, blend).normalized;
         }
 
-        // =====================================================================
-        // FINGER TIP CACHING
-        // =====================================================================
+        #endregion
+
+        #region Finger Tip Caching
 
         private void CacheFingerTips()
         {
@@ -735,9 +712,9 @@ namespace StrokerSync.MotionSources
                     "Expected: " + string.Join(", ", FINGER_RB_NAMES));
         }
 
-        // =====================================================================
-        // FEMALE ATOM CACHING
-        // =====================================================================
+        #endregion
+
+        #region Female Atom Caching
 
         private void CacheFemaleComponents(Atom atom)
         {
@@ -798,9 +775,9 @@ namespace StrokerSync.MotionSources
             CacheFingerTips();
         }
 
-        // =====================================================================
-        // AUTO-SELECT
-        // =====================================================================
+        #endregion
+
+        #region Auto-Select
 
         private void RunAutoSelect()
         {
@@ -859,13 +836,9 @@ namespace StrokerSync.MotionSources
             }
         }
 
-        // =====================================================================
-        // UI
-        // =====================================================================
+        #endregion
 
-        // =====================================================================
-        // PUBLIC UI BUILDERS — called by CombinedSource for the tab system
-        // =====================================================================
+        #region UI
 
         /// <summary>Creates all finger UI (penetration + clitoral). For standalone use.</summary>
         public void CreateUI(StrokerSync plugin)
@@ -927,11 +900,12 @@ namespace StrokerSync.MotionSources
 
             var header = plugin.CreateTextField(
                 new JSONStorableString("fingerClitInfo",
-                    "Clitoral Zone:\n" +
-                    "A sphere (pink indicator) placed near the vaginal\n" +
-                    "opening. Fingers inside it drive vibrators.\n" +
-                    "Adjust offset/radius to align with the character."), true);
-            header.height = 120f;
+                    "Contact Zone (pink sphere):\n" +
+                    "Shared detection zone for fingers AND mouth.\n" +
+                    "Position it near the vaginal opening — adjust\n" +
+                    "offset/radius to align with the character.\n" +
+                    "Cunnilingus uses the same centre with its own radius."), true);
+            header.height = 130f;
             _clitoralUICleanup.Add(() => plugin.RemoveTextField(header));
 
             var sensitivitySlider = plugin.CreateSlider(_clitoralSensitivity, true);
@@ -955,7 +929,7 @@ namespace StrokerSync.MotionSources
             _clitoralUICleanup.Add(() => plugin.RemoveSlider(radiusSlider));
 
             var indicatorToggle = plugin.CreateToggle(_showIndicator, true);
-            indicatorToggle.label = "Show Clitoral Trigger Sphere";
+            indicatorToggle.label = "Show Contact Zone Sphere";
             _clitoralUICleanup.Add(() => plugin.RemoveToggle(indicatorToggle));
         }
 
@@ -1005,5 +979,7 @@ namespace StrokerSync.MotionSources
 
             SuperController.LogMessage("=== StrokerSync [Finger]: RB NAME DUMP END ===");
         }
+
+        #endregion
     }
 }

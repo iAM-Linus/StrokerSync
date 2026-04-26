@@ -7,18 +7,23 @@ using StrokerSync.MotionSources;
 
 namespace StrokerSync
 {
-    /// <summary>
-    /// StrokerSync - Stroker integration via Intiface Central + Bluetooth
-    /// </summary>
     public class StrokerSync : MVRScript
     {
+        #region Singleton
+
         private static StrokerSync _instance;
 
-        // Connection
+        #endregion
+
+        #region Connection
+
         private IntifaceConnectionManager _connectionManager;
         private bool _isInitialized;
 
-        // Configuration storables
+        #endregion
+
+        #region Configuration Storables
+
         private JSONStorableString _serverUrl;
         private JSONStorableStringChooser _motionSourceChooser;
         private JSONStorableStringChooser _deviceChooser;
@@ -26,11 +31,17 @@ namespace StrokerSync
         private JSONStorableStringChooser _vibrationMode;
         private JSONStorableFloat _vibrationIntensityScale;
 
-        // Vibration state
-        private bool _vibrationActive; // True while vibrator is running; used to detect off-edge
-        private JSONStorableFloat _vibrationDisplay; // Live intensity readout (display only, not persisted)
+        #endregion
 
-        // Quick-access overlay panel
+        #region Vibration State
+
+        private bool _vibrationActive;
+        private JSONStorableFloat _vibrationDisplay;
+
+        #endregion
+
+        #region Overlay Panel
+
         private OverlayPanel _overlayPanel;
         private JSONStorableBool _pauseStroker;
         private JSONStorableBool _pauseVibration;
@@ -39,63 +50,88 @@ namespace StrokerSync
         private JSONStorableFloat _strokeZoneMax;
         private JSONStorableFloat _sendRateHz;
         private JSONStorableFloat _deviceSmoothnessMs;
-        // Simulator state
+
+        #endregion
+
+        #region Simulator State
+
         private float _simulatorTarget;
         private float _simulatorSpeed;
 
-        // Always-active motion sources
+        #endregion
+
+        #region Motion Sources
+
         private readonly CombinedSource _combinedSource = new CombinedSource();
 
-        // Tab UI system
-        private JSONStorableStringChooser _tabChooser;
-        private string                    _activeTab   = "Connection";
-        private readonly List<Action>     _tabCleanup  = new List<Action>();
+        #endregion
 
-        // UI
+        #region Tab UI System
+
+        private JSONStorableStringChooser _tabChooser;
+        private string _activeTab = "Connection";
+        private readonly List<Action> _tabCleanup = new List<Action>();
+
+        #endregion
+
+        #region UI Elements
+
         private UIDynamicButton _connectButton;
         private UIDynamicButton _refreshDevicesButton;
         private UIDynamicTextField _statusText;
         private JSONStorableString _statusString;
 
-        private float _lastRawPosSent = -1f;  // Deadband tracked in source space (pre-mapping)
-        private float _sendAccumulator;  // Accumulated time toward next send (accumulator pattern)
+        #endregion
+
+        #region Send Timing
+
+        private float _lastRawPosSent = -1f;
+        private float _sendAccumulator;
         private const float POSITION_DEADZONE = 0.005f;
         private bool _loggedFirstSend;
 
-        // Adaptive send rate: scales Hz based on motion velocity.
-        // Fast strokes get full configured rate; slow/idle movement sends less often.
+        #endregion
+
+        #region Adaptive Send Rate
+
         private float _adaptiveVelocity;
         private float _prevMappedPos;
         private float _prevMappedPosTime;
-        private const float ADAPTIVE_MIN_HZ = 5f;              // Floor rate when nearly idle
-        private const float ADAPTIVE_VELOCITY_THRESHOLD = 0.8f; // pos-units/sec for full rate (full stroke in ~1.2s)
-        private const float ADAPTIVE_VELOCITY_SMOOTHING = 0.40f; // EMA retention — higher value reduces physics-spike sensitivity
+        private const float ADAPTIVE_MIN_HZ = 5f;
+        private const float ADAPTIVE_VELOCITY_THRESHOLD = 0.8f;
+        private const float ADAPTIVE_VELOCITY_SMOOTHING = 0.40f;
 
-        // Position extrapolation: send where the device SHOULD BE at the end of
-        // the interpolation window, not where the penetration IS right now.
-        // This lets the device use the full LinearCmd duration to glide smoothly
-        // instead of staircase-jumping between positions.
-        private float _signedVelocity;                           // Signed EMA velocity (pos-units/sec)
-        private const float EXTRAP_VELOCITY_SMOOTHING = 0.38f;  // EMA retention for extrapolation velocity — reduced for faster reversal tracking
+        #endregion
+
+        #region Position Extrapolation
+
+        private float _signedVelocity;
+        private const float EXTRAP_VELOCITY_SMOOTHING = 0.38f;
         private float _prevExtrapPos;
         private float _prevExtrapTime;
-        private bool _isReversing;   // True when stroke direction just flipped
+        private bool _isReversing;
 
-        // Stroke advance filter: skip same-direction commands that don't push the target
-        // meaningfully further. The device completes its current glide uninterrupted;
-        // only update when the endpoint advances enough, or reverses.
-        // The threshold is DYNAMIC: it scales with the observed stroke amplitude so
-        // small tip-only movements still get fine-grained updates.
+        #endregion
+
+        #region Stroke Advance Filter
+
         private float _lastCommandedTarget = -1f;
-        private float _strokePeak   = 0.5f;   // Most recent local maximum (zero-amplitude start → fine threshold until real data arrives)
-        private float _strokeValley = 0.5f;   // Most recent local minimum
-        private const float STROKE_THRESHOLD_FRACTION = 0.12f; // Threshold = amplitude × this
-        private const float STROKE_THRESHOLD_MIN      = 0.02f; // Floor: never coarser than 2 %
-        private const float STROKE_THRESHOLD_MAX      = 0.15f; // Ceiling: never finer than 15 %
+        private float _strokePeak = 0.5f;
+        private float _strokeValley = 0.5f;
+        private const float STROKE_THRESHOLD_FRACTION = 0.12f;
+        private const float STROKE_THRESHOLD_MIN = 0.02f;
+        private const float STROKE_THRESHOLD_MAX = 0.15f;
 
-        // Settings save/load via VAM's FileManagerSecure API
+        #endregion
+
+        #region Configuration
+
         private static readonly string CONFIG_DIR = "Custom\\Scripts\\StrokerSync";
         private static readonly string CONFIG_PATH = CONFIG_DIR + "\\defaults.json";
+
+        #endregion
+
+        #region Initialization
 
         public override void Init()
         {
@@ -114,19 +150,16 @@ namespace StrokerSync
             _instance = this;
 
             InitStorables();
-            LoadDefaults(); // Apply saved defaults before UI is created
+            LoadDefaults();
             InitUI();
             InitConnectionManager();
 
-            // Start logic for always-active source (no UI yet — tabs do that)
             _combinedSource.OnInit(this);
 
-            // Build overlay after storables are all registered (MaleFemaleSource registers its own in InitStorables)
             _overlayPanel = new OverlayPanel(this, TriggerAutoDetect);
             _overlayPanel.Build();
-            _overlayPanel.SetVisible(false); // Hidden until user opens it
+            _overlayPanel.SetVisible(false);
 
-            // Listen for scene loads so we can reset cached references (session plugin persistence)
             SuperController.singleton.onSceneLoadedHandlers += OnSceneLoaded;
 
             SuperController.LogMessage("StrokerSync: Plugin initialized.");
@@ -160,8 +193,6 @@ namespace StrokerSync
             _serverUrl = new JSONStorableString("serverUrl", "ws://127.0.0.1:12345");
             RegisterString(_serverUrl);
 
-            // Keep "motionSource" registered so old saved scenes don't error on load.
-            // It is no longer used functionally — CombinedSource always runs.
             _motionSourceChooser = new JSONStorableStringChooser(
                 "motionSource",
                 new List<string> { "Combined" },
@@ -274,25 +305,17 @@ namespace StrokerSync
             // It persists the last-open tab across scene loads, which is fine UX.
             _tabChooser = new JSONStorableStringChooser(
                 "_uiTab",
-                new List<string> { "Connection", "Stroker", "Penetration", "Vibration" },
+                new List<string> { "Connection", "Stroker", "Penetration", "Vibration", "Solo" },
                 "Connection", "Tab");
             RegisterStringChooser(_tabChooser);
 
             _combinedSource.OnInitStorables(this);
         }
 
-        // =====================================================================
-        // SETTINGS SAVE / LOAD
-        // =====================================================================
+        #endregion
 
-        /// <summary>
-        /// Save current settings via VAM's FileManagerSecure API.
-        /// for all new scenes. Scene-specific overrides still take priority.
-        /// </summary>
-        /// <summary>
-        /// Save current settings via VAM's FileManagerSecure API.
-        /// These become the defaults for all new scenes.
-        /// </summary>
+        #region Settings Save/Load
+
         private void SaveDefaults()
         {
             try
@@ -314,7 +337,7 @@ namespace StrokerSync
                 json["maleFemale_AutoCalDelay"].AsFloat = GetFloatParamValue("maleFemale_AutoCalDelay");
                 json["maleFemale_RollingCal"] = GetBoolParamValue("maleFemale_RollingCal") ? "true" : "false";
                 json["maleFemale_FullStrokeMode"] = GetBoolParamValue("maleFemale_FullStrokeMode") ? "true" : "false";
-                json["maleFemale_RollingWindowSecs"].AsFloat   = GetFloatParamValue("maleFemale_RollingWindowSecs");
+                json["maleFemale_RollingWindowSecs"].AsFloat = GetFloatParamValue("maleFemale_RollingWindowSecs");
                 json["maleFemale_RollingContractRate"].AsFloat = GetFloatParamValue("maleFemale_RollingContractRate");
 
                 // Toy penetrator defaults
@@ -330,13 +353,13 @@ namespace StrokerSync
                 json["vibrationIntensityScale"].AsFloat = GetFloatParamValue("vibrationIntensityScale");
 
                 // Finger / clitoral defaults
-                json["finger_MaxDepth"].AsFloat            = GetFloatParamValue("finger_MaxDepth");
+                json["finger_MaxDepth"].AsFloat = GetFloatParamValue("finger_MaxDepth");
                 json["finger_ClitoralSensitivity"].AsFloat = GetFloatParamValue("finger_ClitoralSensitivity");
                 json["finger_ClitoralBaseIntensity"].AsFloat = GetFloatParamValue("finger_ClitoralBaseIntensity");
-                json["finger_ClitoralOffsetFwd"].AsFloat   = GetFloatParamValue("finger_ClitoralOffsetFwd");
-                json["finger_ClitoralOffsetUp"].AsFloat    = GetFloatParamValue("finger_ClitoralOffsetUp");
-                json["finger_ClitoralRadius"].AsFloat      = GetFloatParamValue("finger_ClitoralRadius");
-                json["finger_ShowClitoralIndicator"]       = GetBoolParamValue("finger_ShowClitoralIndicator") ? "true" : "false";
+                json["finger_ClitoralOffsetFwd"].AsFloat = GetFloatParamValue("finger_ClitoralOffsetFwd");
+                json["finger_ClitoralOffsetUp"].AsFloat = GetFloatParamValue("finger_ClitoralOffsetUp");
+                json["finger_ClitoralRadius"].AsFloat = GetFloatParamValue("finger_ClitoralRadius");
+                json["finger_ShowClitoralIndicator"] = GetBoolParamValue("finger_ShowClitoralIndicator") ? "true" : "false";
 
                 SuperController.singleton.SaveJSON(json, CONFIG_PATH,
                     () => SuperController.LogMessage("StrokerSync: Defaults saved to " + CONFIG_PATH),
@@ -370,7 +393,7 @@ namespace StrokerSync
                 if (json["maleFemale_AutoCalDelay"] != null) SetFloatParamValue("maleFemale_AutoCalDelay", json["maleFemale_AutoCalDelay"].AsFloat);
                 if (json["maleFemale_RollingCal"] != null) SetBoolParamValue("maleFemale_RollingCal", json["maleFemale_RollingCal"].Value == "true");
                 if (json["maleFemale_FullStrokeMode"] != null) SetBoolParamValue("maleFemale_FullStrokeMode", json["maleFemale_FullStrokeMode"].Value == "true");
-                if (json["maleFemale_RollingWindowSecs"]   != null) SetFloatParamValue("maleFemale_RollingWindowSecs",   json["maleFemale_RollingWindowSecs"].AsFloat);
+                if (json["maleFemale_RollingWindowSecs"] != null) SetFloatParamValue("maleFemale_RollingWindowSecs", json["maleFemale_RollingWindowSecs"].AsFloat);
                 if (json["maleFemale_RollingContractRate"] != null) SetFloatParamValue("maleFemale_RollingContractRate", json["maleFemale_RollingContractRate"].AsFloat);
 
                 // Toy penetrator defaults (ToyAtom is scene-specific so skip on load; axis+length persist as user prefs)
@@ -390,13 +413,13 @@ namespace StrokerSync
                 if (json["vibrationIntensityScale"] != null) SetFloatParamValue("vibrationIntensityScale", json["vibrationIntensityScale"].AsFloat);
 
                 // Finger / clitoral defaults
-                if (json["finger_MaxDepth"]               != null) SetFloatParamValue("finger_MaxDepth",               json["finger_MaxDepth"].AsFloat);
-                if (json["finger_ClitoralSensitivity"]    != null) SetFloatParamValue("finger_ClitoralSensitivity",    json["finger_ClitoralSensitivity"].AsFloat);
-                if (json["finger_ClitoralBaseIntensity"]  != null) SetFloatParamValue("finger_ClitoralBaseIntensity",  json["finger_ClitoralBaseIntensity"].AsFloat);
-                if (json["finger_ClitoralOffsetFwd"]      != null) SetFloatParamValue("finger_ClitoralOffsetFwd",      json["finger_ClitoralOffsetFwd"].AsFloat);
-                if (json["finger_ClitoralOffsetUp"]       != null) SetFloatParamValue("finger_ClitoralOffsetUp",       json["finger_ClitoralOffsetUp"].AsFloat);
-                if (json["finger_ClitoralRadius"]         != null) SetFloatParamValue("finger_ClitoralRadius",         json["finger_ClitoralRadius"].AsFloat);
-                if (json["finger_ShowClitoralIndicator"]  != null) SetBoolParamValue("finger_ShowClitoralIndicator",   json["finger_ShowClitoralIndicator"].Value == "true");
+                if (json["finger_MaxDepth"] != null) SetFloatParamValue("finger_MaxDepth", json["finger_MaxDepth"].AsFloat);
+                if (json["finger_ClitoralSensitivity"] != null) SetFloatParamValue("finger_ClitoralSensitivity", json["finger_ClitoralSensitivity"].AsFloat);
+                if (json["finger_ClitoralBaseIntensity"] != null) SetFloatParamValue("finger_ClitoralBaseIntensity", json["finger_ClitoralBaseIntensity"].AsFloat);
+                if (json["finger_ClitoralOffsetFwd"] != null) SetFloatParamValue("finger_ClitoralOffsetFwd", json["finger_ClitoralOffsetFwd"].AsFloat);
+                if (json["finger_ClitoralOffsetUp"] != null) SetFloatParamValue("finger_ClitoralOffsetUp", json["finger_ClitoralOffsetUp"].AsFloat);
+                if (json["finger_ClitoralRadius"] != null) SetFloatParamValue("finger_ClitoralRadius", json["finger_ClitoralRadius"].AsFloat);
+                if (json["finger_ShowClitoralIndicator"] != null) SetBoolParamValue("finger_ShowClitoralIndicator", json["finger_ShowClitoralIndicator"].Value == "false");
 
                 SuperController.LogMessage("StrokerSync: Loaded saved defaults");
             }
@@ -430,9 +453,10 @@ namespace StrokerSync
             if (p != null) p.val = val;
         }
 
-        // =====================================================================
-        // UI
-        // =====================================================================
+        #endregion
+
+
+        #region UI
 
         private new void InitUI()
         {
@@ -442,9 +466,9 @@ namespace StrokerSync
             BuildTab("Connection");
         }
 
-        // =====================================================================
-        // TAB SYSTEM
-        // =====================================================================
+        #endregion
+
+        #region Tab System
 
         private void BuildTab(string tab)
         {
@@ -455,10 +479,11 @@ namespace StrokerSync
 
             switch (tab)
             {
-                case "Connection":  BuildMainView();       break;
-                case "Stroker":     BuildStrokerTab();     break;
+                case "Connection": BuildMainView(); break;
+                case "Stroker": BuildStrokerTab(); break;
                 case "Penetration": BuildPenetrationTab(); break;
-                case "Vibration":   BuildVibrationTab();   break;
+                case "Vibration": BuildVibrationTab(); break;
+                case "Solo": BuildSoloTab(); break;
             }
         }
 
@@ -500,6 +525,11 @@ namespace StrokerSync
             vibBtn.button.onClick.AddListener(() => BuildTab("Vibration"));
             SetButtonHeight(vibBtn, 100f);
             _tabCleanup.Add(() => RemoveButton(vibBtn));
+
+            var soloBtn = CreateButton("Solo Tracking Settings  ›");
+            soloBtn.button.onClick.AddListener(() => BuildTab("Solo"));
+            SetButtonHeight(soloBtn, 100f);
+            _tabCleanup.Add(() => RemoveButton(soloBtn));
 
             // ── Right column ─────────────────────────────────────────────────
             var pauseStrokerToggle = CreateToggle(_pauseStroker, true);
@@ -602,7 +632,7 @@ namespace StrokerSync
             // ── Right — Send Rate & Timing ────────────────────────────────────
             sec.CreateSpacer(true).height = 8f;
             sec.CreateTitle("Send Rate & Timing", true);
-            sec.CreateSlider(_sendRateHz, true).label         = "Max Send Rate (Hz)";
+            sec.CreateSlider(_sendRateHz, true).label = "Max Send Rate (Hz)";
             sec.CreateSlider(_deviceSmoothnessMs, true).label = "Duration Padding (ms)";
             sec.CreateSlider(_combinedSource.MFNoiseFilter, true).label =
                 "Noise Filter (0=off, 0.2=moderate)";
@@ -651,7 +681,7 @@ namespace StrokerSync
 
             // ── Left — vibration mode ─────────────────────────────────────────
             sec.CreateTitle("Penetration-Linked Vibration");
-            sec.CreateScrollablePopup(_vibrationMode).label  = "Vibration Mode";
+            sec.CreateScrollablePopup(_vibrationMode).label = "Vibration Mode";
             sec.CreateSlider(_vibrationIntensityScale).label = "Intensity Scale";
             var dispSlider = sec.CreateSlider(_vibrationDisplay);
             dispSlider.label = "Live Intensity";
@@ -665,11 +695,32 @@ namespace StrokerSync
             // ── Right — clitoral zone ──────────────────────────────────────────
             sec.CreateTitle("Clitoral Zone", true);
             sec.OnRemove(_combinedSource.BuildVibrationUI(this));
+
+            // ── Left — cunnilingus detection ──────────────────────────────────
+            sec.CreateSpacer().height = 8f;
+            sec.CreateTitle("Cunnilingus");
+            sec.OnRemove(_combinedSource.BuildOralUI(this));
         }
 
-        // =====================================================================
-        // CONNECTION
-        // =====================================================================
+        private void BuildSoloTab()
+        {
+            var sec = new CollapsibleSection(this);
+            _tabCleanup.Add(() => sec.RemoveAll());
+
+            // ── Back button ───────────────────────────────────────────────────
+            var backBtn = sec.CreateButton("‹ Back");
+            backBtn.height = 100f;
+            backBtn.buttonColor = new Color(0.2f, 0.8f, 0.2f);
+            backBtn.button.onClick.AddListener(() => BuildTab("Connection"));
+
+            // ── Left — Solo UI ────────────────────────────────────────────────
+            sec.CreateTitle("Solo Body-Part Sync");
+            sec.OnRemove(_combinedSource.BuildSoloUI(this));
+        }
+
+        #endregion
+
+        #region Connection
 
         private void OnConnect()
         {
@@ -737,9 +788,9 @@ namespace StrokerSync
                 $"Active: {_connectionManager.DeviceName}";
         }
 
-        // =====================================================================
-        // UPDATE LOOP
-        // =====================================================================
+        #endregion
+
+        #region Update Loop
 
         private void Update()
         {
@@ -763,41 +814,76 @@ namespace StrokerSync
 
             if (hasPenetration)
                 SendDevicePosition(pos, vel);
-            else
-                HandleClitoralVibration();
+
+            // Contact vibration (clitoral finger + oral) runs when:
+            //   • Vibration Mode is not Off, AND
+            //   • Penetration-linked vibration is not already driving the device.
+            bool modeOn = _vibrationMode.val != "Off";
+            bool penetrationVibActive = hasPenetration && modeOn;
+            if (modeOn && !penetrationVibActive)
+                HandleContactVibration();
+            else if (!modeOn && _vibrationActive)
+            {
+                // Mode switched to Off while contact vibration was running — stop immediately.
+                _vibrationActive = false;
+                _vibrationDisplay.val = 0f;
+                if (_connectionManager != null)
+                {
+                    _connectionManager.SendVibrateAll(0f);
+                    _connectionManager.SendVibrate(0f);
+                }
+            }
         }
 
         /// <summary>
-        /// When no penetration is detected, check for clitoral stimulation from
-        /// FingerSource and drive vibrators accordingly.  This is independent of
-        /// VibrationMode (which gates penetration-linked vibration only).
+        /// Drives vibrators from non-penetration contact signals:
+        ///   - Clitoral: finger inside the clitoral zone (FingerSource)
+        ///   - Oral: giver's mouth near the receiver's labia (OralSource)
+        ///
+        /// The stronger of the two active signals wins.  Both respect Pause Vibration.
+        /// This path is independent of VibrationMode, which only governs
+        /// penetration-linked vibration.
         /// </summary>
-        private void HandleClitoralVibration()
+        private void HandleContactVibration()
         {
             float? clitIntensity = _combinedSource.ClitoralIntensity;
-            bool hasClitoral = clitIntensity.HasValue;
+            float? oralIntensity = _combinedSource.OralIntensity;
 
-            // Clitoral vibration respects pause but NOT VibrationMode — it is its own path.
-            bool canSendClit = hasClitoral && !_pauseVibration.val
+            // Pick the strongest active signal
+            float contactIntensity = 0f;
+            bool hasContact = false;
+
+            if (clitIntensity.HasValue)
+            {
+                contactIntensity = clitIntensity.Value;
+                hasContact = true;
+            }
+            if (oralIntensity.HasValue)
+            {
+                contactIntensity = Mathf.Max(contactIntensity, oralIntensity.Value);
+                hasContact = true;
+            }
+
+            bool canSend = hasContact && !_pauseVibration.val
                 && _connectionManager != null && _connectionManager.IsConnected;
 
-            if (canSendClit)
+            if (canSend)
             {
-                float clit = clitIntensity.Value * _vibrationIntensityScale.val;
-                _vibrationDisplay.val = clit;
+                float intensity = contactIntensity * _vibrationIntensityScale.val;
+                _vibrationDisplay.val = intensity;
 
                 // Send to selected vibrator device(s).
                 // Fallback: if no dedicated vibrators exist, try primary device directly
                 // (the Handy 2 Pro may not advertise vibration capability but supports it).
-                _connectionManager.SendVibration(clit);
+                _connectionManager.SendVibration(intensity);
                 if (!_connectionManager.HasAnyVibrator && _connectionManager.HasDevice)
-                    _connectionManager.SendVibrate(clit);
+                    _connectionManager.SendVibrate(intensity);
 
-                _vibrationActive = clit > 0.01f;
+                _vibrationActive = intensity > 0.01f;
             }
             else if (_vibrationActive)
             {
-                // Clitoral contact just ended — stop all vibrators.
+                // Contact just ended — stop all vibrators.
                 _vibrationActive = false;
                 _vibrationDisplay.val = 0f;
                 if (_connectionManager != null)
@@ -848,15 +934,15 @@ namespace StrokerSync
                 // Detect stroke reversal: EMA velocity and instant velocity have opposite signs.
                 // At turnarounds, velocity extrapolation always overshoots — suppress it entirely
                 // and just send the current position so the device decelerates naturally.
-                _isReversing = (_signedVelocity >  0.05f && signedInstant < -0.05f) ||
-                               (_signedVelocity < -0.05f && signedInstant >  0.05f);
+                _isReversing = (_signedVelocity > 0.05f && signedInstant < -0.05f) ||
+                               (_signedVelocity < -0.05f && signedInstant > 0.05f);
 
                 // Update stroke amplitude tracking on each direction change.
                 // Blend 70 % new / 30 % old to resist isolated physics spikes.
                 if (_isReversing)
                 {
-                    if (_signedVelocity > 0f) _strokePeak   = Mathf.Lerp(_strokePeak,   mappedPos, 0.7f);
-                    else                       _strokeValley = Mathf.Lerp(_strokeValley, mappedPos, 0.7f);
+                    if (_signedVelocity > 0f) _strokePeak = Mathf.Lerp(_strokePeak, mappedPos, 0.7f);
+                    else _strokeValley = Mathf.Lerp(_strokeValley, mappedPos, 0.7f);
                 }
 
                 _signedVelocity = Mathf.Lerp(signedInstant, _signedVelocity, EXTRAP_VELOCITY_SMOOTHING);
@@ -994,10 +1080,10 @@ namespace StrokerSync
 
             switch (_vibrationMode.val)
             {
-                case "Depth":    return depthIntensity;
+                case "Depth": return depthIntensity;
                 case "Velocity": return velIntensity;
-                case "Blend":    return Mathf.Clamp01((depthIntensity + velIntensity) * 0.5f);
-                default:         return 0f; // "Off"
+                case "Blend": return Mathf.Clamp01((depthIntensity + velIntensity) * 0.5f);
+                default: return 0f; // "Off"
             }
         }
 
@@ -1011,7 +1097,7 @@ namespace StrokerSync
             _prevExtrapTime = 0f;
             _isReversing = false;
             _lastCommandedTarget = -1f;
-            _strokePeak   = 0.5f;
+            _strokePeak = 0.5f;
             _strokeValley = 0.5f;
             _adaptiveVelocity = 0f;
             _prevMappedPos = 0f;
@@ -1037,15 +1123,17 @@ namespace StrokerSync
             _combinedSource.AutoDetectToyAxis();
         }
 
+        #endregion
+
+        #region Lifecycle
+
         private void OnDestroy()
         {
             _overlayPanel?.Destroy();
             _overlayPanel = null;
 
-            // Unsubscribe from scene load events
             SuperController.singleton.onSceneLoadedHandlers -= OnSceneLoaded;
 
-            // Tear down the active tab's UI elements
             foreach (var a in _tabCleanup) try { a(); } catch { }
             _tabCleanup.Clear();
 
@@ -1059,5 +1147,7 @@ namespace StrokerSync
 
             SuperController.LogMessage("StrokerSync: Plugin destroyed");
         }
+
+        #endregion
     }
 }
