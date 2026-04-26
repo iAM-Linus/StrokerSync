@@ -37,6 +37,7 @@ namespace StrokerSync
 
         private bool _vibrationActive;
         private JSONStorableFloat _vibrationDisplay;
+        private float _contactVibAccumulator = 0.1f;
 
         #endregion
 
@@ -63,6 +64,7 @@ namespace StrokerSync
         #region Motion Sources
 
         private readonly CombinedSource _combinedSource = new CombinedSource();
+        private bool _wasPenetrating;
 
         #endregion
 
@@ -228,6 +230,8 @@ namespace StrokerSync
                 (string name) =>
                 {
                     if (_connectionManager == null) return;
+                    _connectionManager.SendVibrateAll(0f); // stop any currently active vibrator before switching
+
                     if (name == IntifaceConnectionManager.VIBRATOR_ALL)
                         _connectionManager.SelectVibrator(-2);
                     else if (name == IntifaceConnectionManager.VIBRATOR_NONE)
@@ -454,7 +458,6 @@ namespace StrokerSync
         }
 
         #endregion
-
 
         #region UI
 
@@ -813,24 +816,43 @@ namespace StrokerSync
             bool hasPenetration = _combinedSource.OnUpdate(ref pos, ref vel);
 
             if (hasPenetration)
-                SendDevicePosition(pos, vel);
-
-            // Contact vibration (clitoral finger + oral) runs when:
-            //   • Vibration Mode is not Off, AND
-            //   • Penetration-linked vibration is not already driving the device.
-            bool modeOn = _vibrationMode.val != "Off";
-            bool penetrationVibActive = hasPenetration && modeOn;
-            if (modeOn && !penetrationVibActive)
-                HandleContactVibration();
-            else if (!modeOn && _vibrationActive)
             {
-                // Mode switched to Off while contact vibration was running — stop immediately.
-                _vibrationActive = false;
-                _vibrationDisplay.val = 0f;
-                if (_connectionManager != null)
+                SendDevicePosition(pos, vel);
+                _wasPenetrating = true;
+
+                bool modeOn = _vibrationMode.val != "Off";
+                if (!modeOn && _vibrationActive)
                 {
-                    _connectionManager.SendVibrateAll(0f);
-                    _connectionManager.SendVibrate(0f);
+                    _vibrationActive = false;
+                    _vibrationDisplay.val = 0f;
+                    if (_connectionManager != null)
+                    {
+                        _connectionManager.SendVibrateAll(0f);
+                        _connectionManager.SendVibrate(0f);
+                    }
+                }
+            }
+            else
+            {
+                if (_wasPenetrating)
+                {
+                    _wasPenetrating = false;
+                    _sendAccumulator = 1000f; // Force send withdrawn command to avoid getting stuck
+                    SendDevicePosition(1.0f, 0f);
+                }
+
+                bool modeOn = _vibrationMode.val != "Off";
+                if (modeOn)
+                    HandleContactVibration();
+                else if (_vibrationActive)
+                {
+                    _vibrationActive = false;
+                    _vibrationDisplay.val = 0f;
+                    if (_connectionManager != null)
+                    {
+                        _connectionManager.SendVibrateAll(0f);
+                        _connectionManager.SendVibrate(0f);
+                    }
                 }
             }
         }
@@ -849,20 +871,11 @@ namespace StrokerSync
             float? clitIntensity = _combinedSource.ClitoralIntensity;
             float? oralIntensity = _combinedSource.OralIntensity;
 
-            // Pick the strongest active signal
             float contactIntensity = 0f;
             bool hasContact = false;
 
-            if (clitIntensity.HasValue)
-            {
-                contactIntensity = clitIntensity.Value;
-                hasContact = true;
-            }
-            if (oralIntensity.HasValue)
-            {
-                contactIntensity = Mathf.Max(contactIntensity, oralIntensity.Value);
-                hasContact = true;
-            }
+            if (clitIntensity.HasValue) { contactIntensity = clitIntensity.Value; hasContact = true; }
+            if (oralIntensity.HasValue) { contactIntensity = Mathf.Max(contactIntensity, oralIntensity.Value); hasContact = true; }
 
             bool canSend = hasContact && !_pauseVibration.val
                 && _connectionManager != null && _connectionManager.IsConnected;
@@ -872,20 +885,23 @@ namespace StrokerSync
                 float intensity = contactIntensity * _vibrationIntensityScale.val;
                 _vibrationDisplay.val = intensity;
 
-                // Send to selected vibrator device(s).
-                // Fallback: if no dedicated vibrators exist, try primary device directly
-                // (the Handy 2 Pro may not advertise vibration capability but supports it).
-                _connectionManager.SendVibration(intensity);
-                if (!_connectionManager.HasAnyVibrator && _connectionManager.HasDevice)
-                    _connectionManager.SendVibrate(intensity);
+                // Rate limit WebSocket calls to 10Hz to prevent device Bluetooth queue crashing
+                _contactVibAccumulator += Time.deltaTime;
+                if (_contactVibAccumulator >= 0.1f)
+                {
+                    _contactVibAccumulator = 0f;
+                    _connectionManager.SendVibration(intensity);
+                    if (!_connectionManager.HasAnyVibrator && _connectionManager.HasDevice)
+                        _connectionManager.SendVibrate(intensity);
 
-                _vibrationActive = intensity > 0.01f;
+                    _vibrationActive = intensity > 0f;
+                }
             }
             else if (_vibrationActive)
             {
-                // Contact just ended — stop all vibrators.
                 _vibrationActive = false;
                 _vibrationDisplay.val = 0f;
+                _contactVibAccumulator = 0.1f; // Ready for next contact
                 if (_connectionManager != null)
                 {
                     _connectionManager.SendVibrateAll(0f);
@@ -909,7 +925,8 @@ namespace StrokerSync
             _simulatorTarget = Mathf.Clamp01(pos);
             _simulatorSpeed = Mathf.Clamp01(velocity);
 
-            if (!_isInitialized || _pauseStroker.val || _connectionManager == null || !_connectionManager.HasDevice)
+            // Removed _pauseStroker.val from this check so we can still process vibration commands
+            if (!_isInitialized || _connectionManager == null || !_connectionManager.HasDevice)
                 return;
 
             float mappedPos = Mathf.Lerp(_strokeZoneMin.val, _strokeZoneMax.val, pos);
@@ -938,7 +955,7 @@ namespace StrokerSync
                                (_signedVelocity < -0.05f && signedInstant > 0.05f);
 
                 // Update stroke amplitude tracking on each direction change.
-                // Blend 70 % new / 30 % old to resist isolated physics spikes.
+                // Blend 70% new / 30% old to resist isolated physics spikes.
                 if (_isReversing)
                 {
                     if (_signedVelocity > 0f) _strokePeak = Mathf.Lerp(_strokePeak, mappedPos, 0.7f);
@@ -949,10 +966,6 @@ namespace StrokerSync
                 _prevExtrapPos = mappedPos;
                 _prevExtrapTime = now;
             }
-
-            // Deadband in source space: unaffected by stroke zone compression.
-            if (Mathf.Abs(pos - _lastRawPosSent) < POSITION_DEADZONE)
-                return;
 
             // Adaptive rate: scale between ADAPTIVE_MIN_HZ and configured max based on motion speed
             float velocityFactor = Mathf.Clamp01(_adaptiveVelocity / ADAPTIVE_VELOCITY_THRESHOLD);
@@ -970,6 +983,32 @@ namespace StrokerSync
                 return;
 
             _sendAccumulator -= sendInterval;
+
+            // --- VIBRATION BLOCK ---
+            // Moved above the deadband and pause checks so decaying velocities still get broadcasted 
+            // when the position becomes stationary, preventing vibrators from getting stuck.
+            if (_vibrationMode.val != "Off" && !_pauseVibration.val)
+            {
+                float vibIntensity = ComputeVibrationIntensity(mappedPos, _signedVelocity)
+                                     * _vibrationIntensityScale.val;
+                _vibrationDisplay.val = vibIntensity;
+                _connectionManager.SendVibration(vibIntensity);
+                if (!_connectionManager.HasAnyVibrator && _connectionManager.HasDevice)
+                    _connectionManager.SendVibrate(vibIntensity);
+                _vibrationActive = vibIntensity > 0.01f;
+            }
+            else
+            {
+                _vibrationDisplay.val = 0f;
+            }
+
+            // If stroker is paused, skip sending linear commands, but vibration above was still processed
+            if (_pauseStroker.val)
+                return;
+
+            // Deadband in source space: unaffected by stroke zone compression.
+            if (Mathf.Abs(pos - _lastRawPosSent) < POSITION_DEADZONE)
+                return;
 
             // --- LOOK-AHEAD ---
             // Strategy A: if Timeline curve access is available, evaluate the curve
@@ -1047,23 +1086,6 @@ namespace StrokerSync
                 // Simulator reflects what the device actually received
                 _simulatorTarget = extrapolatedPos;
             }
-
-            // Vibration: not gated by stroke advance filter — depth and velocity track continuously.
-            // Runs at the same rate as the linear command (shared accumulator).
-            if (_vibrationMode.val != "Off" && !_pauseVibration.val)
-            {
-                float vibIntensity = ComputeVibrationIntensity(mappedPos, _signedVelocity)
-                                     * _vibrationIntensityScale.val;
-                _vibrationDisplay.val = vibIntensity;
-                _connectionManager.SendVibration(vibIntensity);
-                if (!_connectionManager.HasAnyVibrator && _connectionManager.HasDevice)
-                    _connectionManager.SendVibrate(vibIntensity);
-                _vibrationActive = vibIntensity > 0.01f;
-            }
-            else
-            {
-                _vibrationDisplay.val = 0f;
-            }
         }
 
         /// <summary>
@@ -1113,6 +1135,8 @@ namespace StrokerSync
             _lastRawPosSent = -1f;
             _sendAccumulator = 0f;
             _loggedFirstSend = false;
+            _wasPenetrating = false;
+            _contactVibAccumulator = 0.1f;
 
             // Notify motion source to clear cached references
             _combinedSource.OnSceneLoaded(this);
